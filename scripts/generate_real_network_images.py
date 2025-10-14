@@ -1,0 +1,277 @@
+#!/usr/bin/env python3
+"""
+実際の地理データに対応したネットワーク画像を生成するスクリプト
+地図上にネットワーク構造を重ねて表示
+"""
+
+import sys
+import os
+from pathlib import Path
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+import matplotlib.patches as patches
+from matplotlib.patches import FancyBboxPatch
+import networkx as nx
+import geopandas as gpd
+from shapely.geometry import Point, Polygon
+import contextily as ctx
+import warnings
+warnings.filterwarnings('ignore')
+
+# プロジェクトルートをパスに追加
+project_root = Path(__file__).parent.parent
+sys.path.append(str(project_root))
+
+from src.data_processing import load_spatial_data, preprocess_building_data, preprocess_road_data
+from src.network_builder import create_urban_network, visualize_network
+from src.utils.logger import get_logger
+
+logger = get_logger(__name__)
+
+def generate_real_network_images():
+    """実際の地理データに対応したネットワーク画像を生成"""
+    
+    # 出力ディレクトリの作成
+    output_dir = project_root / "data" / "real_network_images"
+    output_dir.mkdir(parents=True, exist_ok=True)
+    
+    # サンプルデータの読み込み
+    sample_data_path = project_root / "data" / "processed" / "sample_analysis_results.csv"
+    if not sample_data_path.exists():
+        logger.error("サンプルデータが見つかりません")
+        return
+    
+    df = pd.read_csv(sample_data_path)
+    
+    # 代表的な地点を選択（各象限から代表点を選択）
+    representative_points = df
+    
+    logger.info(f"全300地点の処理開始: {len(df)}地点")
+    
+    # 全地点のネットワーク画像を生成
+    for i, (idx, row) in enumerate(representative_points.iterrows()):
+        try:
+            logger.info(f"ネットワーク画像生成中: {i+1}/{len(df)} - 地点ID: {row['location_id']}")
+            
+            # データ取得とネットワーク構築
+            building_gdf, road_gdf = load_spatial_data(row['latitude'], row['longitude'])
+            building_gdf = preprocess_building_data(building_gdf)
+            road_gdf = preprocess_road_data(road_gdf)
+            network_graph = create_urban_network(building_gdf, road_gdf)
+            
+            # 地図上にネットワークを重ねた画像の生成
+            fig = create_map_with_network(
+                network_graph, building_gdf, road_gdf, 
+                row['sparsity'], row['resilience'], row['multi_nodality'],
+                row['latitude'], row['longitude']
+            )
+            
+            # 画像保存
+            output_path = output_dir / f"real_network_{int(row['location_id']):03d}.png"
+            fig.savefig(output_path, dpi=300, bbox_inches='tight', 
+                       facecolor='white', edgecolor='none')
+            plt.close(fig)
+            
+            logger.info(f"画像保存完了: {output_path}")
+            
+        except Exception as e:
+            logger.error(f"地点 {row['location_id']} の画像生成エラー: {e}")
+            continue
+    
+    logger.info("実際の地理データ対応ネットワーク画像生成完了")
+
+def select_representative_points(df, num_points=12):
+    """散布図の各象限から代表的な地点を選択"""
+    
+    # 散布図を4つの象限に分割
+    sparsity_median = df['sparsity'].median()
+    resilience_median = df['resilience'].median()
+    
+    # 各象限の条件
+    conditions = [
+        (df['sparsity'] <= sparsity_median) & (df['resilience'] <= resilience_median),  # 左下
+        (df['sparsity'] > sparsity_median) & (df['resilience'] <= resilience_median),   # 右下
+        (df['sparsity'] <= sparsity_median) & (df['resilience'] > resilience_median),   # 左上
+        (df['sparsity'] > sparsity_median) & (df['resilience'] > resilience_median),    # 右上
+    ]
+    
+    quadrant_names = ['Low Sparsity, Low Resilience', 'High Sparsity, Low Resilience',
+                     'Low Sparsity, High Resilience', 'High Sparsity, High Resilience']
+    
+    selected_points = []
+    
+    for i, (condition, name) in enumerate(zip(conditions, quadrant_names)):
+        quadrant_df = df[condition]
+        if len(quadrant_df) > 0:
+            # 各象限から3点ずつ選択（多様性を考慮）
+            if len(quadrant_df) >= 3:
+                # 多中心性の値でソートして、低・中・高から1点ずつ選択
+                sorted_df = quadrant_df.sort_values('multi_nodality')
+                low_idx = len(sorted_df) // 4
+                mid_idx = len(sorted_df) // 2
+                high_idx = 3 * len(sorted_df) // 4
+                
+                selected_indices = [low_idx, mid_idx, high_idx]
+                selected_points.extend(sorted_df.iloc[selected_indices].to_dict('records'))
+            else:
+                selected_points.extend(quadrant_df.to_dict('records'))
+    
+    return pd.DataFrame(selected_points)
+
+def create_map_with_network(network_graph, building_gdf, road_gdf, 
+                          sparsity, resilience, polycentricity, lat, lon):
+    """地図上にネットワークを重ねた画像を作成"""
+    
+    # 2x2のサブプロットを作成
+    fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(16, 16))
+    
+    # 背景を白に設定
+    for ax in [ax1, ax2, ax3, ax4]:
+        ax.set_facecolor('white')
+    fig.patch.set_facecolor('white')
+    
+    # データの境界を取得
+    if not building_gdf.empty:
+        bounds = building_gdf.total_bounds
+        x_min, y_min, x_max, y_max = bounds
+        # 少し余白を追加
+        margin = (x_max - x_min) * 0.1
+        x_min -= margin
+        y_min -= margin
+        x_max += margin
+        y_max += margin
+    else:
+        # デフォルトの境界
+        x_min, y_min, x_max, y_max = -1000, -1000, 1000, 1000
+    
+    # 1. 建物のみの表示
+    ax1.set_title('Buildings Only', fontsize=14, fontfamily='Arial', pad=20)
+    if not building_gdf.empty:
+        # 疎性に応じた色分け
+        if sparsity < 0.5:
+            building_color = 'lightcoral'  # 高密度（低疎性）
+        elif sparsity < 1.0:
+            building_color = 'lightgray'   # 中密度
+        else:
+            building_color = 'lightblue'   # 低密度（高疎性）
+        
+        building_gdf.plot(ax=ax1, color=building_color, edgecolor='gray', 
+                         linewidth=0.5, alpha=0.8)
+    
+    ax1.set_xlim(x_min, x_max)
+    ax1.set_ylim(y_min, y_max)
+    ax1.set_xlabel('X (m)', fontsize=12, fontfamily='Arial')
+    ax1.set_ylabel('Y (m)', fontsize=12, fontfamily='Arial')
+    ax1.grid(True, color='lightgray', linewidth=0.5, alpha=0.5)
+    ax1.set_aspect('equal')
+    
+    # 2. 建物 + 道路の表示
+    ax2.set_title('Buildings + Roads', fontsize=14, fontfamily='Arial', pad=20)
+    if not building_gdf.empty:
+        building_gdf.plot(ax=ax2, color=building_color, edgecolor='gray', 
+                         linewidth=0.5, alpha=0.8)
+    
+    if not road_gdf.empty:
+        # 適応性に応じた色分け
+        if resilience < 0.3:
+            road_color = 'lightcoral'      # 低適応性
+        elif resilience < 0.7:
+            road_color = 'lightblue'       # 中適応性
+        else:
+            road_color = 'lightgreen'      # 高適応性
+        
+        road_gdf.plot(ax=ax2, color=road_color, linewidth=1, alpha=0.7)
+    
+    ax2.set_xlim(x_min, x_max)
+    ax2.set_ylim(y_min, y_max)
+    ax2.set_xlabel('X (m)', fontsize=12, fontfamily='Arial')
+    ax2.set_ylabel('Y (m)', fontsize=12, fontfamily='Arial')
+    ax2.grid(True, color='lightgray', linewidth=0.5, alpha=0.5)
+    ax2.set_aspect('equal')
+    
+    # 3. 建物 + ネットワークの表示
+    ax3.set_title('Buildings + Network', fontsize=14, fontfamily='Arial', pad=20)
+    if not building_gdf.empty:
+        building_gdf.plot(ax=ax3, color=building_color, edgecolor='gray', 
+                         linewidth=0.5, alpha=0.8)
+    
+    # ネットワークの描画
+    if len(network_graph.nodes()) > 0:
+        # ノードの位置を取得
+        pos = {}
+        for node in network_graph.nodes():
+            if 'x' in network_graph.nodes[node] and 'y' in network_graph.nodes[node]:
+                pos[node] = (network_graph.nodes[node]['x'], network_graph.nodes[node]['y'])
+        
+        if pos:
+            # エッジの描画（適応性に応じて太さを変更）
+            edge_width = 0.3 + (resilience * 0.7)  # 0.3-1.0の範囲
+            nx.draw_networkx_edges(network_graph, pos, ax=ax3, 
+                                 edge_color='black', width=edge_width, alpha=0.6)
+            
+            # ノードの描画（多中心性に応じて色とサイズを変更）
+            if polycentricity < 1.0:
+                node_color = 'red'             # 単中心
+            elif polycentricity < 2.5:
+                node_color = 'orange'          # 中程度の多中心
+            else:
+                node_color = 'purple'          # 高多中心
+            
+            node_size = 15 + (polycentricity * 10)  # 15-65の範囲
+            nx.draw_networkx_nodes(network_graph, pos, ax=ax3, 
+                                 node_color=node_color, node_size=node_size, alpha=0.8)
+    
+    ax3.set_xlim(x_min, x_max)
+    ax3.set_ylim(y_min, y_max)
+    ax3.set_xlabel('X (m)', fontsize=12, fontfamily='Arial')
+    ax3.set_ylabel('Y (m)', fontsize=12, fontfamily='Arial')
+    ax3.grid(True, color='lightgray', linewidth=0.5, alpha=0.5)
+    ax3.set_aspect('equal')
+    
+    # 4. 全体の統合表示
+    ax4.set_title('Complete Network Structure', fontsize=14, fontfamily='Arial', pad=20)
+    if not building_gdf.empty:
+        building_gdf.plot(ax=ax4, color=building_color, edgecolor='gray', 
+                         linewidth=0.5, alpha=0.8)
+    
+    if not road_gdf.empty:
+        road_gdf.plot(ax=ax4, color=road_color, linewidth=1, alpha=0.7)
+    
+    # ネットワークの描画
+    if len(network_graph.nodes()) > 0 and pos:
+        nx.draw_networkx_edges(network_graph, pos, ax=ax4, 
+                             edge_color='black', width=edge_width, alpha=0.6)
+        nx.draw_networkx_nodes(network_graph, pos, ax=ax4, 
+                             node_color=node_color, node_size=node_size, alpha=0.8)
+    
+    ax4.set_xlim(x_min, x_max)
+    ax4.set_ylim(y_min, y_max)
+    ax4.set_xlabel('X (m)', fontsize=12, fontfamily='Arial')
+    ax4.set_ylabel('Y (m)', fontsize=12, fontfamily='Arial')
+    ax4.grid(True, color='lightgray', linewidth=0.5, alpha=0.5)
+    ax4.set_aspect('equal')
+    
+    # 全体のタイトルとメトリクス表示
+    title_text = f'Location Analysis - Lat: {lat:.4f}, Lon: {lon:.4f}\nSparsity: {sparsity:.3f}, Resilience: {resilience:.3f}, Polycentricity: {polycentricity:.3f}'
+    fig.suptitle(title_text, fontsize=16, fontfamily='Arial', y=0.95)
+    
+    # レイアウトの調整
+    plt.tight_layout()
+    plt.subplots_adjust(top=0.9)
+    
+    return fig
+
+def main():
+    """メイン関数"""
+    logger.info("実際の地理データ対応ネットワーク画像生成開始")
+    
+    try:
+        generate_real_network_images()
+        logger.info("実際の地理データ対応ネットワーク画像生成完了")
+    except Exception as e:
+        logger.error(f"実際の地理データ対応ネットワーク画像生成エラー: {e}")
+        raise
+
+if __name__ == "__main__":
+    main()

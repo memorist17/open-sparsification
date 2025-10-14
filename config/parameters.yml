@@ -1,0 +1,175 @@
+# OpenSparsity Analysis Parameters
+# このファイルで分析パラメータを一元管理
+# コードを変更することなく、研究の前提条件を柔軟に変更可能
+
+# 分析対象エリアの定義
+analysis_radius_meters: 2000  # 緯度経度を中心とした分析範囲の半径
+
+# データソース設定
+data:
+  source:
+    type: "gsi_vector_tiles"  # 国土地理院ベクトルタイル
+    base_url: "https://cyberjapandata.gsi.go.jp/xyz/optimal_bvmap-v1"
+    zoom_level: 15  # ズームレベル
+    tile_size: 256  # タイルサイズ
+    tile_extent: 4096  # ベクトルタイルのextent
+    building_layers: ["BldA"]  # 建物ポリゴンレイヤー
+    road_layers: ["RdCL"]      # 道路中心線レイヤー
+  
+  # データ取得範囲（日本全国）
+  bounds:
+    west: 129.0
+    south: 30.0
+    east: 146.0
+    north: 46.0
+  
+  # サンプリング地点設定
+  sampling:
+    num_locations: 300  # 分析対象地点数
+    random_seed: 42     # 再現性のための乱数シード
+    min_distance: 1000  # 地点間の最小距離（メートル）
+
+# 多中心性 (DBSCAN)
+multi_nodality:
+  eps: 50.0           # DBSCANの探索半径 (メートル)
+  min_samples: 5      # クラスターを形成する最小サンプル数
+  metric: "euclidean" # 距離メトリック
+  
+  # 核の分散度計算
+  dispersion:
+    method: "variance"  # variance, std, iqr
+  
+  # 核の多様性計算（将来拡張用）
+  diversity:
+    method: "shannon"   # shannon, simpson, gini
+
+# 疎性分析パラメータ
+sparsity:
+  # フラクタル次元計算
+  fractal:
+    method: "box_counting"  # box_counting, correlation
+    box_sizes: [1, 2, 4, 8, 16, 32, 64]  # ボックスサイズ（メートル）
+  
+  # 建物数の計算
+  building_count:
+    min_area: 10.0  # 最小建物面積（m²）
+
+# 流動性 (Percolation)
+permeability:
+  grid_resolution_meters: 10  # 空間を分割するグリッドの解像度 (メートル)
+  open_space_layers: ['road', 'park']  # オープンスペースと見なすレイヤー名
+  
+  # オープンスペースの定義
+  open_space:
+    # 建物密度の閾値（建物面積/総面積）
+    building_density_threshold: 0.3
+    
+    # 道路幅の最小値（メートル）
+    min_road_width: 3.0
+    
+    # 緑地の最小面積（m²）
+    min_green_area: 100.0
+  
+  # パーコレーション閾値
+  percolation_threshold: 0.5927  # 2D正方格子の理論値
+
+# 重なり分析パラメータ
+overlap:
+  # 属性の定義
+  attributes:
+    - "residential"  # 住宅
+    - "commercial"   # 商業
+    - "industrial"   # 工業
+    - "public"       # 公共
+  
+  # 重複判定の閾値
+  overlap_threshold: 0.1  # 10%以上重複
+
+# 創発性・適応性 (Network)
+emergence:
+  centrality_method: 'betweenness'  # 'betweenness', 'closeness', 'eigenvector' から選択
+  
+  # 建物密度の計算
+  density:
+    radius: 200.0    # 半径（メートル）
+    method: "gaussian"  # gaussian, uniform
+
+# 適応性分析パラメータ (レジリエンス)
+resilience:
+  # Fiedler値計算
+  fiedler:
+    # グラフ構築の閾値
+    distance_threshold: 100.0  # メートル
+    
+    # 重み付け方法
+    weight_method: "distance"  # distance, uniform
+  
+  # ネットワークの種類
+  network_type:
+    - "road"      # 道路ネットワーク
+    - "building"  # 建物ネットワーク
+    - "mixed"     # 混合ネットワーク
+
+# 可視化パラメータ
+visualization:
+  # 散布図の設定
+  scatter_plot:
+    figure_size: [12, 8]
+    dpi: 300
+    color_map: "viridis"
+    alpha: 0.7
+    x_axis: "sparsity"      # X軸指標
+    y_axis: "resilience"    # Y軸指標
+  
+  # ネットワーク可視化
+  network:
+    node_size: 50
+    edge_width: 1.0
+    layout: "spring"  # spring, circular, random
+  
+  # 地図の設定
+  map:
+    center: [35.6762, 139.6503]  # 東京
+    zoom: 10
+    tiles: "OpenStreetMap"
+
+# 計算設定
+computation:
+  # 並列処理
+  parallel:
+    n_jobs: -1  # -1: 全CPU使用
+    backend: "threading"  # threading, multiprocessing
+  
+  # キャッシュ設定
+  cache:
+    enabled: true
+    max_size: "1GB"
+    ttl: 3600  # 秒
+  
+  # メモリ制限
+  memory:
+    max_usage: "8GB"
+    chunk_size: 1000
+
+# ログ設定
+logging:
+  level: "INFO"  # DEBUG, INFO, WARNING, ERROR
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+  file: "logs/opensparsity.log"
+  max_size: "10MB"
+  backup_count: 5
+
+# アプリケーション設定
+app:
+  # Streamlit設定
+  streamlit:
+    page_title: "OpenSparsity Dashboard"
+    page_icon: "🏙️"
+    layout: "wide"
+    initial_sidebar_state: "expanded"
+  
+  # デフォルト表示設定
+  default:
+    selected_metrics: ["sparsity", "resilience"]
+    map_center: [35.6762, 139.6503]
+    map_zoom: 10
