@@ -32,13 +32,32 @@ print(f"利用可能な指標: {available_metrics}")
 df = df.replace([np.inf, -np.inf], np.nan)
 df = df.dropna(subset=available_metrics, how='any').reset_index(drop=True)
 
+
+def normalize_columns(frame: pd.DataFrame, columns: list[str]) -> pd.DataFrame:
+    """指定された列を最小値–最大値で正規化"""
+    normalized = frame.copy()
+    for column in columns:
+        if column not in normalized.columns:
+            continue
+        series = normalized[column].astype(float)
+        col_min = series.min()
+        col_max = series.max()
+        if np.isclose(col_max, col_min):
+            normalized[column] = 0.0
+        else:
+            normalized[column] = (series - col_min) / (col_max - col_min)
+    return normalized
+
+
+normalized_df = normalize_columns(df, available_metrics)
+
 # シンプルな散布図用の設定
 point_size = 60
 point_color = "#1f77b4"
 
 sns.set_theme(style="whitegrid", context="talk", font_scale=0.8)
 
-pair_grid = sns.PairGrid(df, vars=available_metrics, corner=True, height=2.8)
+pair_grid = sns.PairGrid(normalized_df, vars=available_metrics, corner=True, height=2.8)
 
 pair_grid.map_diag(sns.histplot, color="#adb5bd", edgecolor="white", linewidth=0.5)
 
@@ -64,7 +83,7 @@ pair_grid.map_lower(simple_scatter)
 
 pair_grid.fig.subplots_adjust(top=0.92, wspace=0.05, hspace=0.05)
 pair_grid.fig.suptitle(
-    "Comprehensive Urban Morphology Metrics Pair Plot",
+    "Comprehensive Settlement Metrics Pair Plot (Normalized)",
     fontsize=16,
     y=0.98
 )
@@ -97,9 +116,10 @@ for i, metric in enumerate(available_metrics):
 # 統計情報を追加
 stats_text = f"Total locations: {len(df)}\n"
 for metric in available_metrics:
-    if metric in df.columns:
-        values = df[metric]
+    if metric in normalized_df.columns:
+        values = normalized_df[metric]
         stats_text += f"{metric_labels.get(metric, metric)}: {values.mean():.3f}±{values.std():.3f}\n"
+stats_text += "All metrics scaled to [0, 1]"
 
 # 統計情報を図に追加
 pair_grid.fig.text(0.02, 0.02, stats_text, fontsize=8, 

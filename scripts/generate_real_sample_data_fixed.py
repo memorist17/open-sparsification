@@ -44,6 +44,14 @@ USER_SPECIFIED_LOCATIONS = [
     {"name": "Yamanashi City", "lat": 35.6635, "lon": 138.5684, "radius": 1000},
     {"name": "Greenwich CT", "lat": 41.049179869296566, "lon": -73.63494225610658, "radius": 1000},
     {"name": "Bell Labs Holmdel", "lat": 40.391006, "lon": -74.184581, "radius": 1000},
+    {"name": "Kamiyama A", "lat": 33.959822829540045, "lon": 134.30761543643712, "radius": 1000},
+    {"name": "Kamiyama Week", "lat": 33.9687294040191, "lon": 134.3383325623779, "radius": 1000},
+    {"name": "Kamiyama Miyamoto Residence", "lat": 33.963637118765526, "lon": 134.35049344583854, "radius": 1000},
+    {"name": "Kamiyama Marugoto Technical College", "lat": 33.972864196733795, "lon": 134.36278905827217, "radius": 1000},
+    {"name": "Observation Deck", "lat": 33.953743569235925, "lon": 134.4063620051131, "radius": 1000},
+    {"name": "Kawaba Village", "lat": 36.699016518887866, "lon": 139.10910525819972, "radius": 1000},
+    {"name": "Tonami Plain", "lat": 36.602711035167594, "lon": 136.9867048847905, "radius": 1000},
+    {"name": "Taketomi Island", "lat": 24.330804124388035, "lon": 124.08550639616077, "radius": 1000},
 ]
 
 def build_target_locations():

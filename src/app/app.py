@@ -1,7 +1,7 @@
 """
 OpenSparsity Streamlitアプリケーション
 
-都市形態の定量的分析と可視化のためのインタラクティブダッシュボード
+集落形態の定量的分析と可視化のためのインタラクティブダッシュボード
 """
 
 import streamlit as st
@@ -97,7 +97,7 @@ st.markdown("""
 
 # メインヘッダー
 st.markdown('<h1 class="main-header">🏙️ OpenSparsity Dashboard</h1>', unsafe_allow_html=True)
-st.markdown("都市形態の定量的分析と可視化")
+st.markdown("集落形態の定量的分析と可視化")
 
 # 設定ファイルの読み込み
 @st.cache_data
@@ -178,10 +178,72 @@ sample_df = load_sample_data()
 if sample_df is None:
     st.stop()
 
+sample_df = sample_df.copy()
+if 'location_id' in sample_df.columns:
+    try:
+        sample_df['location_id'] = sample_df['location_id'].astype(int)
+    except ValueError:
+        sample_df['location_id'] = sample_df['location_id']
+
 metric_summary = summarize_metrics(
     sample_df,
     ["sparsity", "resilience", "multi_nodality", "permeability"],
 )
+
+normalized_metrics = [
+    "sparsity",
+    "resilience",
+    "multi_nodality",
+    "permeability",
+    "emergence",
+    "overlap",
+]
+
+for metric in normalized_metrics:
+    if metric not in sample_df.columns:
+        continue
+    series = sample_df[metric].astype(float)
+    min_val = metric_summary.get(metric, {}).get("min", float(series.min()))
+    max_val = metric_summary.get(metric, {}).get("max", float(series.max()))
+    rng = max(max_val - min_val, 1e-9)
+    normalized_values = (series - min_val) / rng
+    sample_df[f"{metric}_normalized"] = normalized_values.clip(0.0, 1.0)
+
+location_lookup = sample_df.set_index('location_id') if 'location_id' in sample_df.columns else None
+
+
+def format_location_label(loc_id: int) -> str:
+    """Format location labels with names when available."""
+    if location_lookup is None:
+        return f"Location {int(loc_id)}"
+    try:
+        loc_id_int = int(loc_id)
+        if loc_id_int in location_lookup.index:
+            row = location_lookup.loc[loc_id_int]
+            if 'name' in row.index:
+                name_value = row.get('name')
+                if isinstance(name_value, str) and name_value.strip():
+                    return f"{name_value} (ID {loc_id_int})"
+        return f"Location {loc_id_int}"
+    except Exception:
+        return f"Location {loc_id}"
+
+
+def format_location_with_metrics(loc_id: int) -> str:
+    """Format location labels with key metric summaries."""
+    base_label = format_location_label(loc_id)
+    if location_lookup is None:
+        return base_label
+    try:
+        loc_id_int = int(loc_id)
+        if loc_id_int in location_lookup.index:
+            row = location_lookup.loc[loc_id_int]
+            sparsity = row.get('sparsity', float('nan'))
+            resilience = row.get('resilience', float('nan'))
+            return f"{base_label} | S: {sparsity:.3f}, R: {resilience:.3f}"
+    except Exception:
+        pass
+    return base_label
 
 # サイドバー設定
 st.sidebar.title("⚙️ 分析設定")
@@ -189,7 +251,7 @@ st.sidebar.title("⚙️ 分析設定")
 # 分析説明
 st.sidebar.markdown("""
 ### 📊 分析概要
-このアプリケーションは、指定された緯度経度周辺の都市形態を定量的に分析し、
+このアプリケーションは、指定された緯度経度周辺の集落形態を定量的に分析し、
 以下の指標を計算します：
 
 - **疎性**: 空間充填率と建物数の関係
@@ -226,7 +288,7 @@ analyze_button = st.sidebar.button("🔍 分析実行", type="primary")
 col1, col2 = st.columns([2, 1])
 
 with col1:
-    st.header("📈 都市構造特性散布図")
+    st.header("📈 集落構造特性散布図")
 
     col_chart, col_image = st.columns([2, 1])
 
@@ -234,22 +296,53 @@ with col1:
         tab_scatter, tab_pair = st.tabs(["Scatter Plot", "Pair Plot"])
 
         with tab_scatter:
+            x_metric = 'sparsity_normalized' if 'sparsity_normalized' in sample_df.columns else 'sparsity'
+            y_metric = 'resilience_normalized' if 'resilience_normalized' in sample_df.columns else 'resilience'
+            color_metric = 'multi_nodality_normalized' if 'multi_nodality_normalized' in sample_df.columns else 'multi_nodality'
+            size_metric = 'permeability_normalized' if 'permeability_normalized' in sample_df.columns else 'permeability'
+
+            size_series = sample_df[size_metric].astype(float).fillna(0.0)
+            if size_metric.endswith("_normalized"):
+                size_series = size_series.clip(0.0, 1.0)
+            size_display_col = f"_{size_metric}_marker"
+            sample_df[size_display_col] = (size_series * 0.8) + 0.2
+
+            hover_data = {}
+            for field, formatter in [
+                ('location_id', True),
+                ('name', True),
+                ('latitude', ':.4f'),
+                ('longitude', ':.4f'),
+                ('sparsity', ':.3f'),
+                ('resilience', ':.3f'),
+                ('multi_nodality', ':.3f'),
+                ('permeability', ':.3f'),
+                ('emergence', ':.3f'),
+                ('address', True),
+            ]:
+                if field in sample_df.columns:
+                    hover_data[field] = formatter
+            hover_data[size_display_col] = False
+
+            def _label(metric: str, base_label: str) -> str:
+                return f"{base_label} (Normalized)" if metric.endswith("_normalized") else base_label
+
             scatter_fig = px.scatter(
                 sample_df,
-                x='sparsity',
-                y='resilience',
-                color='multi_nodality',
-                size='permeability',
-                hover_data=['latitude', 'longitude', 'emergence', 'address'],
+                x=x_metric,
+                y=y_metric,
+                color=color_metric,
+                size=size_display_col,
+                hover_data=hover_data,
                 title='Urban Morphological Characteristics',
                 labels={
-                    'sparsity': 'Sparsity',
-                    'resilience': 'Resilience',
-                    'multi_nodality': 'Polycentricity',
-                    'permeability': 'Permeability'
+                    x_metric: _label(x_metric, "Sparsity"),
+                    y_metric: _label(y_metric, "Resilience"),
+                    color_metric: _label(color_metric, "Polycentricity"),
+                    size_display_col: "Marker size (scaled)",
                 },
                 color_continuous_scale='viridis',
-                size_max=15
+                size_max=25
             )
 
             scatter_fig.update_traces(customdata=sample_df['location_id'])
@@ -295,7 +388,7 @@ with col1:
             scatter_fig.update_coloraxes(
                 colorbar=dict(
                     title=dict(
-                        text="Polycentricity<br>(Color)",
+                        text="Polycentricity<br>(Normalized)",
                         font=dict(size=12, color="black", family="Arial")
                     ),
                     tickfont=dict(size=10, color="black", family="Arial"),
@@ -315,7 +408,7 @@ with col1:
                 y=0.25,
                 xref="paper",
                 yref="paper",
-                text="<b>Point Size:</b><br>Permeability<br>(larger = higher)",
+                text="<b>Point Size:</b><br>Permeability (Normalized)<br>(larger = higher)",
                 showarrow=False,
                 font=dict(size=10, color="black", family="Arial"),
                 bgcolor="white",
@@ -333,8 +426,8 @@ with col1:
                 closest_point = sample_df.iloc[closest_idx]
 
                 scatter_fig.add_trace(go.Scatter(
-                    x=[closest_point['sparsity']],
-                    y=[closest_point['resilience']],
+                    x=[closest_point[x_metric]],
+                    y=[closest_point[y_metric]],
                     mode='markers',
                     marker=dict(
                         size=20,
@@ -344,37 +437,157 @@ with col1:
                     ),
                     name='Selected location',
                     hovertemplate=(
-                        "選択地点<br>疎性: %{x:.3f}<br>適応性: %{y:.3f}<extra></extra>"
+                        "選択地点<br>"
+                        "疎性(正規化): %{x:.3f}<br>"
+                        "レジリエンス(正規化): %{y:.3f}<br>"
+                        f"疎性(raw): {closest_point.get('sparsity', float('nan')):.3f}<br>"
+                        f"レジリエンス(raw): {closest_point.get('resilience', float('nan')):.3f}"
+                        "<extra></extra>"
                     )
                 ))
 
+            if x_metric.endswith("_normalized"):
+                scatter_fig.update_xaxes(range=[0, 1])
+            if y_metric.endswith("_normalized"):
+                scatter_fig.update_yaxes(range=[0, 1])
+
             st.plotly_chart(scatter_fig, use_container_width=True, key="main_scatter")
+            sample_df.drop(columns=[size_display_col], inplace=True, errors='ignore')
 
         with tab_pair:
-            pair_metrics = ['sparsity', 'resilience', 'multi_nodality', 'permeability']
-            pair_fig = px.scatter_matrix(
-                sample_df,
-                dimensions=pair_metrics,
-                color='multi_nodality',
-                hover_data=['location_id', 'address'],
-                labels={metric: metric.replace('_', ' ').title() for metric in pair_metrics},
-                color_continuous_scale='viridis'
-            )
-            pair_fig.update_traces(diagonal_visible=False)
-            pair_fig.update_layout(
-                height=520,
-                font=dict(family="Arial", size=11, color="black"),
-                plot_bgcolor="white",
-                paper_bgcolor="white",
-                coloraxis_colorbar=dict(
-                    title=dict(text="Polycentricity", font=dict(size=12)),
-                    tickfont=dict(size=10)
-                ),
-                dragmode='select'
-            )
-            st.plotly_chart(pair_fig, use_container_width=True, key="pair_plot")
-        
-    
+            base_metrics = ['sparsity', 'resilience', 'multi_nodality', 'permeability']
+            metric_label_map = {
+                'sparsity': 'Sparsity',
+                'resilience': 'Resilience',
+                'multi_nodality': 'Polycentricity',
+                'permeability': 'Permeability'
+            }
+            pair_dimensions = []
+            pair_labels = {}
+
+            for metric in base_metrics:
+                normalized_col = f"{metric}_normalized"
+                if normalized_col in sample_df.columns:
+                    pair_dimensions.append(normalized_col)
+                    pair_labels[normalized_col] = f"{metric_label_map[metric]} (Normalized)"
+                elif metric in sample_df.columns:
+                    pair_dimensions.append(metric)
+                    pair_labels[metric] = metric_label_map[metric]
+
+            color_metric_pair = 'multi_nodality_normalized' if 'multi_nodality_normalized' in sample_df.columns else 'multi_nodality'
+
+            pair_hover_data = {}
+            for field, formatter in [
+                ('location_id', True),
+                ('name', True),
+                ('latitude', ':.4f'),
+                ('longitude', ':.4f'),
+                ('sparsity', ':.3f'),
+                ('resilience', ':.3f'),
+                ('multi_nodality', ':.3f'),
+                ('permeability', ':.3f'),
+                ('emergence', ':.3f'),
+                ('address', True),
+            ]:
+                if field in sample_df.columns:
+                    pair_hover_data[field] = formatter
+
+            if pair_dimensions:
+                pair_fig = px.scatter_matrix(
+                    sample_df,
+                    dimensions=pair_dimensions,
+                    color=color_metric_pair,
+                    hover_data=pair_hover_data,
+                    labels=pair_labels,
+                    color_continuous_scale='viridis'
+                )
+                pair_fig.update_traces(diagonal_visible=False)
+                if any(dim.endswith("_normalized") for dim in pair_dimensions):
+                    pair_fig.update_xaxes(range=[0, 1])
+                    pair_fig.update_yaxes(range=[0, 1])
+                colorbar_title = "Polycentricity (Normalized)" if color_metric_pair.endswith("_normalized") else "Polycentricity"
+                pair_fig.update_layout(
+                    height=520,
+                    font=dict(family="Arial", size=11, color="black"),
+                    plot_bgcolor="white",
+                    paper_bgcolor="white",
+                    coloraxis_colorbar=dict(
+                        title=dict(text=colorbar_title, font=dict(size=12)),
+                        tickfont=dict(size=10)
+                    ),
+                    dragmode='select'
+                )
+                st.plotly_chart(pair_fig, use_container_width=True, key="pair_plot")
+            else:
+                st.info("表示可能な指標がありません。データ列を確認してください。")
+
+        st.subheader("🧭 Location Metric Overview")
+        if location_lookup is not None:
+            display_columns = [
+                'location_id',
+                'name',
+                'latitude',
+                'longitude',
+                'sparsity',
+                'resilience',
+                'multi_nodality',
+                'permeability',
+                'emergence',
+                'overlap'
+            ]
+            available_columns = [col for col in display_columns if col in sample_df.columns]
+            if available_columns and len(sample_df) > 0:
+                row_limit = st.slider(
+                    "表示行数",
+                    min_value=1,
+                    max_value=len(sample_df),
+                    value=min(15, len(sample_df)),
+                    key="location_table_row_limit"
+                )
+                display_df = sample_df[available_columns].head(row_limit).copy()
+                if 'latitude' in display_df.columns:
+                    display_df['latitude'] = display_df['latitude'].map(lambda v: f"{v:.4f}")
+                if 'longitude' in display_df.columns:
+                    display_df['longitude'] = display_df['longitude'].map(lambda v: f"{v:.4f}")
+                for metric_col in ['sparsity', 'resilience', 'multi_nodality', 'permeability', 'emergence', 'overlap']:
+                    if metric_col in display_df.columns:
+                        display_df[metric_col] = display_df[metric_col].map(lambda v: f"{v:.4f}")
+
+                header_values = [col.replace('_', ' ').title() for col in available_columns]
+                cell_values = [display_df[col].tolist() for col in available_columns]
+
+                table_fig = go.Figure(
+                    data=[
+                        go.Table(
+                            header=dict(
+                                values=header_values,
+                                fill_color="#1f77b4",
+                                font=dict(color="white", size=12),
+                                align="left"
+                            ),
+                            cells=dict(
+                                values=cell_values,
+                                fill_color="#f0f2f6",
+                                align="left",
+                                font=dict(size=11)
+                            ),
+                            columnwidth=[70] + [120] * (len(available_columns) - 1)
+                        )
+                    ]
+                )
+                table_fig.update_layout(
+                    margin=dict(l=10, r=10, t=40, b=10),
+                    height=320
+                )
+                st.plotly_chart(table_fig, use_container_width=True, key="location_metric_table")
+            elif available_columns:
+                st.info("表示するデータがありません。")
+            else:
+                st.info("表示可能な指標データが見つかりません。")
+        else:
+            st.info("位置情報が利用できないため一覧を表示できませんでした。")
+
+
     with col_image:
         st.subheader("🔍 Location Details")
         
@@ -383,15 +596,19 @@ with col1:
         selected_location_right = st.selectbox(
             "Select a location to view details:",
             options=location_options,
-            format_func=lambda x: f"Location {int(x)}",
+            format_func=format_location_label,
             key="right_location_selector"
         )
         
         # 選択された地点の情報を表示
         if selected_location_right is not None:
-            selected_row_right = sample_df[sample_df['location_id'] == selected_location_right].iloc[0]
+            try:
+                selected_row_right = location_lookup.loc[int(selected_location_right)]
+            except Exception:
+                selected_row_right = sample_df[sample_df['location_id'] == selected_location_right].iloc[0]
             
-            st.write(f"**Location {int(selected_location_right)}**")
+            st.write(f"**{format_location_label(selected_location_right)}**")
+            st.write(f"**地点名**: {selected_row_right.get('name', '地点名なし')}")
             st.write(f"**住所**: {selected_row_right.get('address', '住所情報なし')}")
             st.write(f"**緯度**: {selected_row_right['latitude']:.4f}")
             st.write(f"**経度**: {selected_row_right['longitude']:.4f}")
@@ -400,6 +617,36 @@ with col1:
             st.write(f"**多中心性**: {selected_row_right['multi_nodality']:.3f}")
             st.write(f"**流動性**: {selected_row_right['permeability']:.3f}")
             st.write(f"**創発性**: {selected_row_right['emergence']:.3f}")
+            
+            metric_columns = [
+                col for col in [
+                    'sparsity',
+                    'resilience',
+                    'multi_nodality',
+                    'permeability',
+                    'emergence',
+                    'overlap'
+                ] if col in sample_df.columns
+            ]
+
+            if metric_columns:
+                metric_fig = px.bar(
+                    x=[col.replace('_', ' ').title() for col in metric_columns],
+                    y=[selected_row_right[col] for col in metric_columns],
+                    labels={'x': 'Metric', 'y': 'Value'},
+                    title="Metric Profile"
+                )
+                metric_fig.update_layout(
+                    height=320,
+                    margin=dict(l=40, r=10, t=60, b=40),
+                    yaxis=dict(title="Value"),
+                    xaxis=dict(title=None)
+                )
+                st.plotly_chart(
+                    metric_fig,
+                    use_container_width=True,
+                    key=f"metric_profile_{selected_location_right}"
+                )
             
             with st.spinner("Comparative view rendering..."):
                 try:
@@ -445,12 +692,15 @@ with col1:
     selected_location = st.selectbox(
         "Select a location to view its network structure:",
         options=location_options,
-        format_func=lambda x: f"Location {int(x)} (Sparsity: {sample_df[sample_df['location_id']==x]['sparsity'].iloc[0]:.3f}, Resilience: {sample_df[sample_df['location_id']==x]['resilience'].iloc[0]:.3f})"
+        format_func=format_location_with_metrics
     )
     
     # 選択された地点の詳細情報とネットワーク画像を表示
     if selected_location is not None:
-        selected_row = sample_df[sample_df['location_id'] == selected_location].iloc[0]
+        try:
+            selected_row = location_lookup.loc[int(selected_location)]
+        except Exception:
+            selected_row = sample_df[sample_df['location_id'] == selected_location].iloc[0]
         
         # 詳細情報の表示
         col_info1, col_info2, col_info3 = st.columns(3)
@@ -480,7 +730,8 @@ with col1:
                        width='stretch')
             else:
                 # 画像が存在しない場合は、その地点の情報を表示
-                st.info(f"Location {int(selected_location)} の詳細情報:")
+                st.info(f"{format_location_label(selected_location)} の詳細情報:")
+                st.write(f"**地点名**: {selected_row.get('name', '地点名なし')}")
                 st.write(f"**住所**: {selected_row.get('address', '住所情報なし')}")
                 st.write(f"**緯度**: {selected_row['latitude']:.4f}")
                 st.write(f"**経度**: {selected_row['longitude']:.4f}")
@@ -689,7 +940,7 @@ if analyze_button:
                 ax=ax
             )
             
-            ax.set_title(f"都市ネットワーク構造 (緯度: {input_lat:.4f}, 経度: {input_lon:.4f})")
+            ax.set_title(f"集落ネットワーク構造 (緯度: {input_lat:.4f}, 経度: {input_lon:.4f})")
             ax.set_aspect('equal')
             ax.grid(True, alpha=0.3)
             
@@ -705,7 +956,7 @@ st.markdown(
     """
     <div style='text-align: center; color: #666;'>
         OpenSparsity Dashboard v0.1.0 | 
-        都市形態の定量的分析と可視化
+        集落形態の定量的分析と可視化
     </div>
     """,
     unsafe_allow_html=True

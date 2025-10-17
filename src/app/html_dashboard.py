@@ -57,7 +57,7 @@ def generate_html_dashboard():
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>OpenSparsity Dashboard - 都市形態学的特性分析</title>
+    <title>OpenSparsity Dashboard - 集落形態学的特性分析</title>
     <style>
         * {{
             margin: 0;
@@ -241,7 +241,7 @@ def generate_html_dashboard():
     <div class="container">
         <header>
             <h1>🏙️ OpenSparsity Dashboard</h1>
-            <p class="subtitle">都市形態学的特性の包括的分析</p>
+            <p class="subtitle">集落形態学的特性の包括的分析</p>
         </header>
         
         <div class="content">
@@ -276,15 +276,16 @@ def generate_html_dashboard():
             <div class="section">
                 <h2>📈 包括的メトリクス ペアプロット</h2>
                 <div class="pairplot-container">
-                    <img src="data:image/png;base64,{pairplot_base64}" alt="Comprehensive Urban Metrics Pair Plot">
+                    <img src="data:image/png;base64,{pairplot_base64}" alt="Comprehensive Settlement Metrics Pair Plot">
                 </div>
+                <p style="color: #64748b; font-size: 0.9rem; margin-top: 8px;">※ 指標はすべて 0〜1 に正規化して可視化しています。</p>
                 
                 <div class="metric-description">
                     <h3>指標の説明</h3>
                     <ul>
                         <li><strong>Sparsity (疎性)</strong>: 建物密度の低さを示す指標。値が高いほど建物が疎らに配置されている</li>
                         <li><strong>Resilience (レジリエンス)</strong>: ネットワークの回復力と適応性を示す指標</li>
-                        <li><strong>Multi-nodality (多中心性)</strong>: 複数の中心を持つ都市構造の度合い</li>
+                        <li><strong>Multi-nodality (多中心性)</strong>: 複数の中心を持つ集落構造の度合い</li>
                         <li><strong>Permeability (流動性)</strong>: 人の移動のしやすさを示す指標</li>
                         <li><strong>Emergence (創発性)</strong>: 新しい機能が生まれる可能性を示す指標</li>
                         <li><strong>Overlap (重なり)</strong>: 機能の重複度を示す指標</li>
@@ -320,7 +321,7 @@ def generate_html_dashboard():
         </div>
         
         <footer>
-            <p>© 2024 OpenSparsity Project - 都市形態学的特性分析基盤</p>
+            <p>© 2024 OpenSparsity Project - 集落形態学的特性分析基盤</p>
             <p>データポイント数: {len(df)} | 生成日時: {pd.Timestamp.now().strftime('%Y-%m-%d %H:%M:%S')}</p>
         </footer>
     </div>
@@ -340,5 +341,3 @@ def generate_html_dashboard():
 
 if __name__ == "__main__":
     generate_html_dashboard()
-
-

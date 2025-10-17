@@ -77,6 +77,26 @@ pair_grid.map_lower(simple_scatter)
 # レイアウト調整
 pair_grid.fig.subplots_adjust(top=0.92, wspace=0.05, hspace=0.05)
 
+# 指標間に区切り線を追加
+n_metrics = len(available_metrics)
+for i in range(n_metrics):
+    for j in range(i + 1):
+        if i < len(pair_grid.axes) and j < len(pair_grid.axes[i]):
+            ax = pair_grid.axes[i, j]
+            
+            # 各サブプロットの枠線を太くする
+            for spine in ax.spines.values():
+                spine.set_linewidth(1.5)
+                spine.set_edgecolor('#2c3e50')
+            
+            # 右側の列に区切り線を追加（最後の列以外）
+            if j < i:
+                ax.axvline(x=ax.get_xlim()[1], color='#2c3e50', linewidth=2.5, zorder=10)
+            
+            # 下側の行に区切り線を追加（最後の行以外）
+            if i < n_metrics - 1:
+                ax.axhline(y=ax.get_ylim()[0], color='#2c3e50', linewidth=2.5, zorder=10)
+
 # タイトル
 pair_grid.fig.suptitle(
     "Comprehensive Urban Morphology Metrics Pair Plot",
