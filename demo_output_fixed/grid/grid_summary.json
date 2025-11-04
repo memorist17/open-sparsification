@@ -1,0 +1,22 @@
+{
+  "n_points": 484,
+  "bounds": [
+    0.0,
+    0.0,
+    1000.0,
+    1000.0
+  ],
+  "lacunarity_large": 1.0130571943161761,
+  "lacunarity_medium": 1.1298593799708487,
+  "lacunarity_small": 5.398282161629356,
+  "percolation_r_p": 37.47412008281574,
+  "percolation_max_S1_ratio": 1.0,
+  "percolation_critical_degree": 1.905138339920949,
+  "multifractal_D0": 1.382584453279736,
+  "multifractal_D1": NaN,
+  "multifractal_D2": 1.4306615657952717,
+  "multifractal_alpha_min": 0.7526221159238021,
+  "multifractal_alpha_max": 2.063161724349945,
+  "multifractal_Delta_alpha": 1.3105396084261427,
+  "multifractal_f_alpha_max": 2.383194905164911
+}
