@@ -127,9 +127,12 @@ def cmd_demo(args):
     
     # Generate synthetic patterns
     patterns = {
-        'clustered': prepare_sample_data(500, 'clustered', seed=42),
+        'singlelinear': prepare_sample_data(500, 'singlelinear', seed=42),
+        'uniform': prepare_sample_data(500, 'uniform', seed=42),
         'random': prepare_sample_data(500, 'random', seed=42),
-        'grid': prepare_sample_data(500, 'grid', seed=42),
+        'radial': prepare_sample_data(500, 'radial', seed=42),
+        'singleclustered': prepare_sample_data(500, 'singleclustered', seed=42),
+        'multiclustered': prepare_sample_data(500, 'multiclustered', seed=42),
     }
     
     for name, points in patterns.items():

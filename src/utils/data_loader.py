@@ -163,7 +163,7 @@ def filter_points_by_tile(
 
 def prepare_sample_data(
     n_points: int = 500,
-    pattern: str = 'clustered',
+    pattern: str = 'random',
     bounds: Tuple[float, float, float, float] = (0, 0, 1000, 1000),
     seed: int = 42
 ) -> gpd.GeoDataFrame:
@@ -175,9 +175,12 @@ def prepare_sample_data(
     n_points : int
         Number of points
     pattern : str
-        'random': Poisson random
-        'clustered': Hierarchical clusters
-        'grid': Regular grid
+        'singlelinear': Single linear pattern (points along a line)
+        'uniform': Uniform distribution (grid-like with slight randomness)
+        'random': Poisson random distribution
+        'radial': Radial pattern (points radiating from center)
+        'singleclustered': Single cluster (one large cluster)
+        'multiclustered': Multiple clusters
     bounds : tuple
         (minx, miny, maxx, maxy)
     seed : int
@@ -190,13 +193,90 @@ def prepare_sample_data(
     """
     np.random.seed(seed)
     minx, miny, maxx, maxy = bounds
+    width = maxx - minx
+    height = maxy - miny
+    center_x = (minx + maxx) / 2
+    center_y = (miny + maxy) / 2
     
-    if pattern == 'random':
+    if pattern == 'singlelinear':
+        # Single linear pattern: points along a diagonal line
+        # Line from bottom-left to top-right with some perpendicular noise
+        t = np.linspace(0, 1, n_points)
+        # Diagonal line
+        x = minx + t * width
+        y = miny + t * height
+        # Add perpendicular noise
+        noise_scale = min(width, height) / 50
+        perp_x = -(y - center_y) / np.sqrt(width**2 + height**2)
+        perp_y = (x - center_x) / np.sqrt(width**2 + height**2)
+        noise = np.random.normal(0, noise_scale, n_points)
+        x += perp_x * noise
+        y += perp_y * noise
+        coords = np.column_stack([x, y])
+    
+    elif pattern == 'uniform':
+        # Uniform distribution: grid-like with slight randomness
+        n_side = int(np.sqrt(n_points))
+        x_spacing = width / n_side
+        y_spacing = height / n_side
+        x_base = np.linspace(minx + x_spacing/2, maxx - x_spacing/2, n_side)
+        y_base = np.linspace(miny + y_spacing/2, maxy - y_spacing/2, n_side)
+        xx, yy = np.meshgrid(x_base, y_base)
+        # Flatten and take exactly n_points
+        x_flat = xx.flatten()
+        y_flat = yy.flatten()
+        # If we have more points than needed, randomly sample
+        if len(x_flat) > n_points:
+            indices = np.random.choice(len(x_flat), n_points, replace=False)
+            x_flat = x_flat[indices]
+            y_flat = y_flat[indices]
+        # If we have fewer points, pad with random points
+        elif len(x_flat) < n_points:
+            n_missing = n_points - len(x_flat)
+            x_flat = np.concatenate([x_flat, np.random.uniform(minx, maxx, n_missing)])
+            y_flat = np.concatenate([y_flat, np.random.uniform(miny, maxy, n_missing)])
+        # Add small random perturbation
+        noise_scale = min(x_spacing, y_spacing) / 4
+        x = x_flat + np.random.normal(0, noise_scale, len(x_flat))
+        y = y_flat + np.random.normal(0, noise_scale, len(y_flat))
+        coords = np.column_stack([x, y])
+    
+    elif pattern == 'random':
+        # Poisson random distribution
         x = np.random.uniform(minx, maxx, n_points)
         y = np.random.uniform(miny, maxy, n_points)
         coords = np.column_stack([x, y])
     
-    elif pattern == 'clustered':
+    elif pattern == 'radial':
+        # Radial pattern: points radiating from center
+        # Angular distribution
+        angles = np.random.uniform(0, 2 * np.pi, n_points)
+        # Radial distribution (exponential for more points near center)
+        radii = np.random.exponential(scale=min(width, height) / 4, size=n_points)
+        radii = np.clip(radii, 0, min(width, height) / 2)
+        # Convert to Cartesian
+        x = center_x + radii * np.cos(angles)
+        y = center_y + radii * np.sin(angles)
+        # Clip to bounds
+        x = np.clip(x, minx, maxx)
+        y = np.clip(y, miny, maxy)
+        coords = np.column_stack([x, y])
+    
+    elif pattern == 'singleclustered':
+        # Single large cluster
+        cluster_center = np.array([center_x, center_y])
+        cluster_std = min(width, height) / 8
+        coords = np.random.normal(
+            cluster_center,
+            scale=cluster_std,
+            size=(n_points, 2)
+        )
+        # Clip to bounds
+        coords[:, 0] = np.clip(coords[:, 0], minx, maxx)
+        coords[:, 1] = np.clip(coords[:, 1], miny, maxy)
+    
+    elif pattern == 'multiclustered':
+        # Multiple clusters (similar to old 'clustered')
         n_clusters = int(np.sqrt(n_points) / 2)
         points_per_cluster = n_points // n_clusters
         
@@ -216,16 +296,13 @@ def prepare_sample_data(
             coords_list.append(cluster_points)
         
         coords = np.vstack(coords_list)
-    
-    elif pattern == 'grid':
-        n_side = int(np.sqrt(n_points))
-        x = np.linspace(minx, maxx, n_side)
-        y = np.linspace(miny, maxy, n_side)
-        xx, yy = np.meshgrid(x, y)
-        coords = np.column_stack([xx.flatten(), yy.flatten()])
+        # Clip to bounds
+        coords[:, 0] = np.clip(coords[:, 0], minx, maxx)
+        coords[:, 1] = np.clip(coords[:, 1], miny, maxy)
     
     else:
-        raise ValueError(f"Unknown pattern: {pattern}")
+        raise ValueError(f"Unknown pattern: {pattern}. Supported patterns: "
+                        f"singlelinear, uniform, random, radial, singleclustered, multiclustered")
     
     # Create GeoDataFrame
     geometry = [Point(x, y) for x, y in coords]

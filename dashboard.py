@@ -51,13 +51,28 @@ def load_pattern_results(pattern_dir):
             with open(json_file, 'r') as f:
                 results[metric] = json.load(f)
     
+    # If summary.json exists but 'summary' key is not set, use the summary file content directly
+    summary_file = pattern_dir / f'{pattern_dir.name}_summary.json'
+    if not summary_file.exists():
+        summary_file = pattern_dir / 'summary.json'
+    
+    if summary_file.exists() and 'summary' not in results:
+        with open(summary_file, 'r') as f:
+            results['summary'] = json.load(f)
+    
     # Load point data if available (for spatial visualization)
     try:
         import geopandas as gpd
-        point_file = pattern_dir.parent.parent / 'data' / 'points' / f'{pattern_dir.name}.gpkg'
+        point_file = pattern_dir / f'{pattern_dir.name}_points.gpkg'
         if point_file.exists():
             results['points'] = gpd.read_file(point_file)
-    except:
+            print(f"DEBUG [LOAD] {pattern_dir.name}: Loaded point data from {point_file} - {len(results['points'])} points")
+        else:
+            print(f"DEBUG [LOAD] {pattern_dir.name}: Point file not found: {point_file}")
+    except Exception as e:
+        print(f"Warning: Could not load point data for {pattern_dir.name}: {e}")
+        import traceback
+        traceback.print_exc()
         pass
     
     return results
@@ -294,75 +309,23 @@ def create_multifractal_figure(results, selected_patterns):
 
 
 def create_point_distribution_figure(results, selected_patterns):
-    """Create spatial point distribution visualization."""
-    fig = go.Figure()
+    """Create spatial point distribution visualization with subplots."""
+    if not selected_patterns:
+        empty_fig = go.Figure()
+        empty_fig.add_annotation(text="No patterns selected", xref="paper", yref="paper", x=0.5, y=0.5, showarrow=False)
+        empty_fig.update_layout(template='plotly_white', height=400)
+        return empty_fig
     
-    colors = px.colors.qualitative.Set2
+    n_patterns = len(selected_patterns)
+    cols = min(3, n_patterns)  # Max 3 columns
+    rows = (n_patterns + cols - 1) // cols
     
-    for i, pattern in enumerate(selected_patterns):
-        if pattern not in results:
-            continue
-        
-        # Generate mock point data for visualization
-        np.random.seed(hash(pattern) % 2**32)
-        n_points = 500
-        
-        if pattern == 'clustered':
-            # Clustered pattern
-            n_clusters = 5
-            points_per_cluster = n_points // n_clusters
-            x_coords, y_coords = [], []
-            for _ in range(n_clusters):
-                cx, cy = np.random.uniform(100, 900, 2)
-                x = np.random.normal(cx, 80, points_per_cluster)
-                y = np.random.normal(cy, 80, points_per_cluster)
-                x_coords.extend(x)
-                y_coords.extend(y)
-        elif pattern == 'random':
-            # Random pattern
-            x_coords = np.random.uniform(0, 1000, n_points)
-            y_coords = np.random.uniform(0, 1000, n_points)
-        else:  # grid
-            # Grid pattern
-            n_side = int(np.sqrt(n_points))
-            x = np.linspace(50, 950, n_side)
-            y = np.linspace(50, 950, n_side)
-            xx, yy = np.meshgrid(x, y)
-            x_coords = xx.flatten()[:n_points]
-            y_coords = yy.flatten()[:n_points]
-        
-        fig.add_trace(go.Scatter(
-            x=x_coords,
-            y=y_coords,
-            mode='markers',
-            name=pattern,
-            marker=dict(
-                size=4,
-                color=colors[i % len(colors)],
-                opacity=0.6
-            ),
-            hovertemplate='<b>%{fullData.name}</b><br>' +
-                         'X: %{x:.1f}<br>' +
-                         'Y: %{y:.1f}<br>' +
-                         '<extra></extra>'
-        ))
-    
-    fig.update_layout(
-        title='Spatial Point Distribution',
-        xaxis_title='X (meters)',
-        yaxis_title='Y (meters)',
-        template='plotly_white',
-        hovermode='closest',
-        height=600,
-        yaxis=dict(scaleanchor="x", scaleratio=1)
+    fig = make_subplots(
+        rows=rows, cols=cols,
+        subplot_titles=selected_patterns,
+        horizontal_spacing=0.1,
+        vertical_spacing=0.15
     )
-    
-    return fig
-
-
-def create_network_figure(results, selected_patterns):
-    """Create network structure visualization."""
-    fig = go.Figure()
     
     colors = px.colors.qualitative.Set2
     
@@ -370,81 +333,266 @@ def create_network_figure(results, selected_patterns):
         if pattern not in results:
             continue
         
-        # Generate mock network data
-        np.random.seed(hash(pattern) % 2**32)
-        n_points = 100
+        row = idx // cols + 1
+        col = idx % cols + 1
         
-        if pattern == 'clustered':
-            n_clusters = 5
-            points_per_cluster = n_points // n_clusters
-            coords = []
-            for _ in range(n_clusters):
-                cx, cy = np.random.uniform(100, 900, 2)
-                x = np.random.normal(cx, 60, points_per_cluster)
-                y = np.random.normal(cy, 60, points_per_cluster)
-                coords.extend(zip(x, y))
-            threshold = 150
-        elif pattern == 'random':
-            x_coords = np.random.uniform(0, 1000, n_points)
-            y_coords = np.random.uniform(0, 1000, n_points)
-            coords = list(zip(x_coords, y_coords))
-            threshold = 100
-        else:  # grid
-            n_side = int(np.sqrt(n_points))
-            x = np.linspace(100, 900, n_side)
-            y = np.linspace(100, 900, n_side)
-            xx, yy = np.meshgrid(x, y)
-            coords = list(zip(xx.flatten(), yy.flatten()))
-            threshold = 120
+        # Use actual point data if available, otherwise generate mock data
+        if 'points' in results[pattern] and results[pattern]['points'] is not None:
+            import geopandas as gpd
+            points_gdf = results[pattern]['points']
+            x_coords = points_gdf.geometry.x.values
+            y_coords = points_gdf.geometry.y.values
+            print(f"DEBUG [POINT] {pattern}: Using ACTUAL data - {len(x_coords)} points")
+            print(f"DEBUG [POINT] {pattern}: X range: [{min(x_coords):.2f}, {max(x_coords):.2f}]")
+            print(f"DEBUG [POINT] {pattern}: Y range: [{min(y_coords):.2f}, {max(y_coords):.2f}]")
+        else:
+            print(f"DEBUG [POINT] {pattern}: Using MOCK data (fallback)")
+            # Generate mock point data for visualization (fallback)
+            np.random.seed(hash(pattern) % 2**32)
+            n_points = 500
+            center_x, center_y = 500, 500
+            
+            if pattern == 'singlelinear':
+                t = np.linspace(0, 1, n_points)
+                x_coords = 100 + t * 800
+                y_coords = 100 + t * 800
+                noise = np.random.normal(0, 20, n_points)
+                x_coords += -noise * (y_coords - center_y) / 1000
+                y_coords += noise * (x_coords - center_x) / 1000
+            elif pattern == 'uniform':
+                n_side = int(np.sqrt(n_points))
+                x = np.linspace(100, 900, n_side)
+                y = np.linspace(100, 900, n_side)
+                xx, yy = np.meshgrid(x, y)
+                x_flat = xx.flatten()
+                y_flat = yy.flatten()
+                if len(x_flat) > n_points:
+                    indices = np.random.choice(len(x_flat), n_points, replace=False)
+                    x_flat = x_flat[indices]
+                    y_flat = y_flat[indices]
+                elif len(x_flat) < n_points:
+                    n_missing = n_points - len(x_flat)
+                    x_flat = np.concatenate([x_flat, np.random.uniform(100, 900, n_missing)])
+                    y_flat = np.concatenate([y_flat, np.random.uniform(100, 900, n_missing)])
+                noise_scale = 30
+                x_coords = x_flat + np.random.normal(0, noise_scale, len(x_flat))
+                y_coords = y_flat + np.random.normal(0, noise_scale, len(y_flat))
+            elif pattern == 'random':
+                x_coords = np.random.uniform(0, 1000, n_points)
+                y_coords = np.random.uniform(0, 1000, n_points)
+            elif pattern == 'radial':
+                angles = np.random.uniform(0, 2 * np.pi, n_points)
+                radii = np.random.exponential(scale=200, size=n_points)
+                radii = np.clip(radii, 0, 400)
+                x_coords = center_x + radii * np.cos(angles)
+                y_coords = center_y + radii * np.sin(angles)
+            elif pattern == 'singleclustered':
+                x_coords = np.random.normal(center_x, 100, n_points)
+                y_coords = np.random.normal(center_y, 100, n_points)
+            else:  # multiclustered
+                n_clusters = 5
+                points_per_cluster = n_points // n_clusters
+                x_coords, y_coords = [], []
+                for _ in range(n_clusters):
+                    cx, cy = np.random.uniform(100, 900, 2)
+                    x = np.random.normal(cx, 80, points_per_cluster)
+                    y = np.random.normal(cy, 80, points_per_cluster)
+                    x_coords.extend(x)
+                    y_coords.extend(y)
         
-        coords = np.array(coords)
+        # Convert to Python floats for Plotly
+        x_coords = [float(x) for x in x_coords]
+        y_coords = [float(y) for y in y_coords]
         
-        # Create edges
-        edge_x, edge_y = [], []
-        for i in range(len(coords)):
-            for j in range(i+1, len(coords)):
-                dist = np.linalg.norm(coords[i] - coords[j])
-                if dist < threshold:
-                    edge_x.extend([coords[i][0], coords[j][0], None])
-                    edge_y.extend([coords[i][1], coords[j][1], None])
+        # Calculate actual bounds for consistent axis ranges
+        x_min, x_max = min(x_coords), max(x_coords)
+        y_min, y_max = min(y_coords), max(y_coords)
+        x_padding = (x_max - x_min) * 0.05 if x_max > x_min else 50
+        y_padding = (y_max - y_min) * 0.05 if y_max > y_min else 50
+        x_range = [max(0, x_min - x_padding), min(1000, x_max + x_padding)]
+        y_range = [max(0, y_min - y_padding), min(1000, y_max + y_padding)]
         
-        # Add edges
-        if edge_x:
-            fig.add_trace(go.Scatter(
-                x=edge_x,
-                y=edge_y,
-                mode='lines',
-                line=dict(width=0.5, color=colors[idx % len(colors)]),
-                opacity=0.3,
-                hoverinfo='skip',
+        fig.add_trace(
+            go.Scatter(
+                x=x_coords,
+                y=y_coords,
+                mode='markers',
+                name=pattern,
+                marker=dict(
+                    size=3,
+                    color=colors[idx % len(colors)],
+                    opacity=0.7
+                ),
+                hovertemplate='<b>%{fullData.name}</b><br>' +
+                             'X: %{x:.1f}<br>' +
+                             'Y: %{y:.1f}<br>' +
+                             '<extra></extra>',
                 showlegend=False
-            ))
-        
-        # Add nodes
-        fig.add_trace(go.Scatter(
-            x=coords[:, 0],
-            y=coords[:, 1],
-            mode='markers',
-            name=pattern,
-            marker=dict(
-                size=6,
-                color=colors[idx % len(colors)],
-                line=dict(width=1, color='white')
             ),
-            hovertemplate='<b>%{fullData.name}</b><br>' +
-                         'X: %{x:.1f}<br>' +
-                         'Y: %{y:.1f}<br>' +
-                         '<extra></extra>'
-        ))
+            row=row, col=col
+        )
+        
+        # Update axes for each subplot with consistent ranges
+        fig.update_xaxes(title_text="X (meters)", row=row, col=col, range=x_range)
+        fig.update_yaxes(title_text="Y (meters)", row=row, col=col, range=y_range, scaleanchor="x", scaleratio=1)
     
     fig.update_layout(
-        title=f'Network Structure (threshold-based connectivity)',
-        xaxis_title='X (meters)',
-        yaxis_title='Y (meters)',
+        title='Spatial Point Distribution',
         template='plotly_white',
         hovermode='closest',
-        height=600,
-        yaxis=dict(scaleanchor="x", scaleratio=1)
+        height=300 * rows
+    )
+    
+    return fig
+
+
+def create_network_figure(results, selected_patterns):
+    """Create network structure visualization with subplots using actual analysis network."""
+    if not selected_patterns:
+        empty_fig = go.Figure()
+        empty_fig.add_annotation(text="No patterns selected", xref="paper", yref="paper", x=0.5, y=0.5, showarrow=False)
+        empty_fig.update_layout(template='plotly_white', height=400)
+        return empty_fig
+    
+    n_patterns = len(selected_patterns)
+    cols = min(3, n_patterns)  # Max 3 columns
+    rows = (n_patterns + cols - 1) // cols
+    
+    fig = make_subplots(
+        rows=rows, cols=cols,
+        subplot_titles=selected_patterns,
+        horizontal_spacing=0.1,
+        vertical_spacing=0.15
+    )
+    
+    colors = px.colors.qualitative.Set2
+    
+    # Import the actual network building function used in percolation analysis
+    from src.metrics.percolation import build_distance_network
+    
+    for idx, pattern in enumerate(selected_patterns):
+        if pattern not in results:
+            continue
+        
+        row = idx // cols + 1
+        col = idx % cols + 1
+        
+        # Get threshold from percolation data (r_p)
+        threshold = None
+        if 'percolation' in results[pattern] and 'summary' in results[pattern]:
+            summary = results[pattern]['summary']
+            # Use percolation threshold (r_p) if available
+            if 'percolation_r_p' in summary:
+                threshold = summary['percolation_r_p']
+            elif 'percolation' in results[pattern]:
+                percolation_df = results[pattern]['percolation']
+                if len(percolation_df) > 0:
+                    threshold = percolation_df['threshold'].median()
+        
+        print(f"DEBUG [NETWORK] {pattern}: threshold = {threshold}")
+        
+        # Use actual point data - skip if not available
+        if 'points' not in results[pattern] or results[pattern]['points'] is None:
+            print(f"DEBUG [NETWORK] {pattern}: No point data available - SKIPPING")
+            continue
+        
+        points_gdf = results[pattern]['points']
+        
+        # Get coordinates from the same point data as left side
+        x_coords = points_gdf.geometry.x.values
+        y_coords = points_gdf.geometry.y.values
+        coords = np.column_stack([x_coords, y_coords])
+        
+        print(f"DEBUG [NETWORK] {pattern}: Using ACTUAL data - {len(x_coords)} points")
+        print(f"DEBUG [NETWORK] {pattern}: X range: [{min(x_coords):.2f}, {max(x_coords):.2f}]")
+        print(f"DEBUG [NETWORK] {pattern}: Y range: [{min(y_coords):.2f}, {max(y_coords):.2f}]")
+        
+        # Build network using the same function as in percolation analysis
+        if threshold is not None and threshold > 0:
+            G = build_distance_network(points_gdf, threshold, method='radius')
+            print(f"DEBUG [NETWORK] {pattern}: Network built - {G.number_of_nodes()} nodes, {G.number_of_edges()} edges")
+        else:
+            print(f"DEBUG [NETWORK] {pattern}: No threshold available - SKIPPING")
+            continue
+        
+        # Extract edges from graph (use node indices to match coordinates)
+        edge_x, edge_y = [], []
+        for edge in G.edges():
+            # G.nodes[node]['pos'] contains the coordinates, but we use the same coords array
+            # to ensure exact correspondence with left side
+            node_i, node_j = edge[0], edge[1]
+            x0, y0 = coords[node_i]
+            x1, y1 = coords[node_j]
+            edge_x.extend([float(x0), float(x1), None])
+            edge_y.extend([float(y0), float(y1), None])
+        
+        print(f"DEBUG [NETWORK] {pattern}: Extracted {len(edge_x)} edge coordinates (including None separators)")
+        
+        # Add edges first (so they appear behind nodes)
+        if edge_x and len(edge_x) > 0:
+            edge_x_clean = [float(x) if x is not None else None for x in edge_x]
+            edge_y_clean = [float(y) if y is not None else None for y in edge_y]
+            
+            fig.add_trace(
+                go.Scatter(
+                    x=edge_x_clean,
+                    y=edge_y_clean,
+                    mode='lines',
+                    line=dict(width=0.8, color=colors[idx % len(colors)]),
+                    opacity=0.4,
+                    hoverinfo='skip',
+                    showlegend=False
+                ),
+                row=row, col=col
+            )
+            print(f"DEBUG [NETWORK] {pattern}: Added edge trace with {len(edge_x_clean)} points")
+        else:
+            print(f"DEBUG [NETWORK] {pattern}: WARNING - No edges to display!")
+        
+        # Add nodes - use the same coordinates as left side
+        node_x = [float(coord[0]) for coord in coords]
+        node_y = [float(coord[1]) for coord in coords]
+        
+        print(f"DEBUG [NETWORK] {pattern}: Adding {len(node_x)} nodes")
+        
+        # Calculate same axis ranges as left side (from same data)
+        x_min, x_max = min(node_x), max(node_x)
+        y_min, y_max = min(node_y), max(node_y)
+        x_padding = (x_max - x_min) * 0.05 if x_max > x_min else 50
+        y_padding = (y_max - y_min) * 0.05 if y_max > y_min else 50
+        x_range = [max(0, x_min - x_padding), min(1000, x_max + x_padding)]
+        y_range = [max(0, y_min - y_padding), min(1000, y_max + y_padding)]
+        
+        fig.add_trace(
+            go.Scatter(
+                x=node_x,
+                y=node_y,
+                mode='markers',
+                name=pattern,
+                marker=dict(
+                    size=3,  # Same size as left side
+                    color=colors[idx % len(colors)],
+                    opacity=0.7,  # Same opacity as left side
+                    line=dict(width=0.3, color='white')
+                ),
+                hovertemplate='<b>%{fullData.name}</b><br>' +
+                             'X: %{x:.1f}<br>' +
+                             'Y: %{y:.1f}<br>' +
+                             '<extra></extra>',
+                showlegend=False
+            ),
+            row=row, col=col
+        )
+        
+        # Update axes for each subplot with same ranges as left side
+        fig.update_xaxes(title_text="X (meters)", row=row, col=col, range=x_range)
+        fig.update_yaxes(title_text="Y (meters)", row=row, col=col, range=y_range, scaleanchor="x", scaleratio=1)
+    
+    fig.update_layout(
+        title='Network Structure (threshold-based connectivity)',
+        template='plotly_white',
+        hovermode='closest',
+        height=300 * rows
     )
     
     return fig
@@ -473,7 +621,21 @@ def create_summary_table(results, selected_patterns):
         summary_data.append(row)
     
     if not summary_data:
-        return html.Div("No summary data available")
+        # Return empty figure instead of html.Div
+        empty_fig = go.Figure()
+        empty_fig.add_annotation(
+            text="No summary data available",
+            xref="paper", yref="paper",
+            x=0.5, y=0.5,
+            showarrow=False,
+            font=dict(size=16)
+        )
+        empty_fig.update_layout(
+            title='Summary Statistics',
+            template='plotly_white',
+            height=200
+        )
+        return empty_fig
     
     df = pd.DataFrame(summary_data)
     
@@ -494,6 +656,7 @@ def create_summary_table(results, selected_patterns):
     
     fig.update_layout(
         title='Summary Statistics',
+        template='plotly_white',
         height=200 + len(summary_data) * 30
     )
     
@@ -597,17 +760,81 @@ def create_app(data_dir):
         Input('pattern-selector', 'value')
     )
     def update_plots(selected_patterns):
-        if not selected_patterns:
-            selected_patterns = pattern_names[:1]
+        try:
+            if not selected_patterns:
+                selected_patterns = pattern_names[:1]
+            
+            print(f"DEBUG: Updating plots for patterns: {selected_patterns}")
+            print(f"DEBUG: Available results: {list(all_results.keys())}")
+            
+            # Create empty figure as fallback
+            empty_fig = go.Figure()
+            empty_fig.add_annotation(text="No data available", xref="paper", yref="paper", x=0.5, y=0.5, showarrow=False)
+            empty_fig.update_layout(template='plotly_white')
+            
+            try:
+                summary_fig = create_summary_table(all_results, selected_patterns)
+                # If summary_fig is html.Div, convert to empty figure
+                if not isinstance(summary_fig, go.Figure):
+                    summary_fig = empty_fig
+            except Exception as e:
+                print(f"ERROR in summary_table: {e}")
+                import traceback
+                traceback.print_exc()
+                summary_fig = empty_fig
+            
+            try:
+                point_fig = create_point_distribution_figure(all_results, selected_patterns)
+            except Exception as e:
+                print(f"ERROR in point_distribution: {e}")
+                import traceback
+                traceback.print_exc()
+                point_fig = empty_fig
+            
+            try:
+                network_fig = create_network_figure(all_results, selected_patterns)
+            except Exception as e:
+                print(f"ERROR in network_structure: {e}")
+                import traceback
+                traceback.print_exc()
+                network_fig = empty_fig
+            
+            try:
+                lac_fig = create_lacunarity_figure(all_results, selected_patterns)
+                print(f"DEBUG: Lacunarity figure created, traces: {len(lac_fig.data)}")
+            except Exception as e:
+                print(f"ERROR in lacunarity: {e}")
+                import traceback
+                traceback.print_exc()
+                lac_fig = empty_fig
+            
+            try:
+                perc_fig = create_percolation_figure(all_results, selected_patterns)
+            except Exception as e:
+                print(f"ERROR in percolation: {e}")
+                import traceback
+                traceback.print_exc()
+                perc_fig = empty_fig
+            
+            try:
+                mf_fig = create_multifractal_figure(all_results, selected_patterns)
+            except Exception as e:
+                print(f"ERROR in multifractal: {e}")
+                import traceback
+                traceback.print_exc()
+                mf_fig = empty_fig
+            
+            return summary_fig, point_fig, network_fig, lac_fig, perc_fig, mf_fig
         
-        summary_fig = create_summary_table(all_results, selected_patterns)
-        point_fig = create_point_distribution_figure(all_results, selected_patterns)
-        network_fig = create_network_figure(all_results, selected_patterns)
-        lac_fig = create_lacunarity_figure(all_results, selected_patterns)
-        perc_fig = create_percolation_figure(all_results, selected_patterns)
-        mf_fig = create_multifractal_figure(all_results, selected_patterns)
-        
-        return summary_fig, point_fig, network_fig, lac_fig, perc_fig, mf_fig
+        except Exception as e:
+            print(f"FATAL ERROR in update_plots: {e}")
+            import traceback
+            traceback.print_exc()
+            # Return empty figures
+            empty_fig = go.Figure()
+            empty_fig.add_annotation(text=f"Error: {str(e)}", xref="paper", yref="paper", x=0.5, y=0.5, showarrow=False)
+            empty_fig.update_layout(template='plotly_white')
+            return empty_fig, empty_fig, empty_fig, empty_fig, empty_fig, empty_fig
     
     return app
 

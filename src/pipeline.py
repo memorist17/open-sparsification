@@ -378,6 +378,12 @@ def batch_analysis(
         pattern_dir.mkdir(exist_ok=True)
         analyzer.save(str(pattern_dir), prefix=pattern_name)
         
+        # Save point data for visualization
+        points_file = pattern_dir / f"{pattern_name}_points.gpkg"
+        points.to_file(str(points_file), driver='GPKG')
+        if verbose:
+            print(f"Saved point data: {points_file}")
+        
         # Save visualizations
         fig_dir = pattern_dir / 'figures'
         fig_dir.mkdir(exist_ok=True)
