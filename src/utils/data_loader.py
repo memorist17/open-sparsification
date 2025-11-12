@@ -5,16 +5,18 @@ Data loading and preprocessing utilities.
 import geopandas as gpd
 import pandas as pd
 import numpy as np
-from pathlib import Path
 from typing import Optional, Tuple, List
 import networkx as nx
 from shapely.geometry import box, Point
 import pickle
+from scipy.spatial import cKDTree
+import warnings
 
 
 def load_points(
     filepath: str,
-    crs: str = 'EPSG:3857'
+    crs: str = 'EPSG:3857',
+    layer: Optional[str] = None
 ) -> gpd.GeoDataFrame:
     """
     Load point data from GeoPackage or other geospatial formats.
@@ -25,13 +27,16 @@ def load_points(
         Path to point data file (*.gpkg, *.shp, *.geojson)
     crs : str
         Target CRS (default: EPSG:3857 - Web Mercator)
+    layer : str, optional
+        Layer name for multi-layer sources (e.g., GeoPackage)
     
     Returns
     -------
     points : gpd.GeoDataFrame
         Point geometries in target CRS
     """
-    gdf = gpd.read_file(filepath)
+    read_kwargs = {"layer": layer} if layer else {}
+    gdf = gpd.read_file(filepath, **read_kwargs)
     
     # Reproject if necessary
     if gdf.crs is None:
@@ -161,6 +166,196 @@ def filter_points_by_tile(
     return filtered
 
 
+def _reset_and_preserve_crs(points: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
+    """Return a copy with reset index while keeping CRS information."""
+
+    sampled = points.copy()
+    sampled.reset_index(drop=True, inplace=True)
+    if points.crs is not None:
+        sampled.set_crs(points.crs, inplace=True)
+    return sampled
+
+
+def sample_points_random(
+    points: gpd.GeoDataFrame,
+    n_samples: int,
+    random_state: Optional[int] = None
+) -> gpd.GeoDataFrame:
+    """Randomly sample point geometries without spatial bias."""
+
+    if n_samples <= 0:
+        raise ValueError("n_samples must be a positive integer")
+
+    if len(points) <= n_samples:
+        return _reset_and_preserve_crs(points)
+
+    sampled = points.sample(n=n_samples, random_state=random_state).copy()
+    sampled.reset_index(drop=True, inplace=True)
+    if points.crs is not None:
+        sampled.set_crs(points.crs, inplace=True)
+    return sampled
+
+
+def sample_points_spatial_grid(
+    points: gpd.GeoDataFrame,
+    cell_size: float,
+    max_per_cell: int = 1,
+    target_count: Optional[int] = None,
+    random_state: Optional[int] = None
+) -> gpd.GeoDataFrame:
+    """Sample representative points from each spatial grid cell."""
+
+    if cell_size <= 0:
+        raise ValueError("cell_size must be positive")
+    if max_per_cell <= 0:
+        raise ValueError("max_per_cell must be positive")
+
+    if len(points) == 0:
+        return _reset_and_preserve_crs(points)
+
+    coords = np.column_stack([
+        points.geometry.x.values,
+        points.geometry.y.values
+    ])
+
+    minx, miny, _, _ = points.total_bounds
+    cell_x = np.floor((coords[:, 0] - minx) / cell_size).astype(int)
+    cell_y = np.floor((coords[:, 1] - miny) / cell_size).astype(int)
+
+    df = points.copy()
+    df["__cell_x"] = cell_x
+    df["__cell_y"] = cell_y
+
+    rng = np.random.default_rng(random_state)
+    selected_indices: List[int] = []
+
+    for (_, group) in df.groupby(["__cell_x", "__cell_y"], sort=False):
+        indices = group.index.to_numpy()
+        if len(indices) <= max_per_cell:
+            selected_indices.extend(indices.tolist())
+        else:
+            choice = rng.choice(indices, size=max_per_cell, replace=False)
+            selected_indices.extend(choice.tolist())
+
+    if target_count is not None and len(selected_indices) > target_count:
+        selected_indices = rng.choice(
+            selected_indices, size=target_count, replace=False
+        ).tolist()
+
+    sampled = points.loc[selected_indices].copy()
+    df.drop(columns=["__cell_x", "__cell_y"], inplace=True, errors="ignore")
+    sampled.reset_index(drop=True, inplace=True)
+    if points.crs is not None:
+        sampled.set_crs(points.crs, inplace=True)
+    return sampled
+
+
+def sample_points_uniform_spacing(
+    points: gpd.GeoDataFrame,
+    target_count: int,
+    random_state: Optional[int] = None
+) -> gpd.GeoDataFrame:
+    """Sample points that are approximately evenly spaced over the extent."""
+
+    if target_count <= 0:
+        raise ValueError("target_count must be positive")
+
+    n_points = len(points)
+    if n_points <= target_count:
+        return _reset_and_preserve_crs(points)
+
+    bounds = points.total_bounds
+    minx, miny, maxx, maxy = bounds
+    width = maxx - minx
+    height = maxy - miny
+    if width <= 0 or height <= 0:
+        warnings.warn("Zero-area bounds detected; falling back to random sampling")
+        return sample_points_random(points, target_count, random_state=random_state)
+
+    area = width * height
+    spacing = np.sqrt(area / target_count)
+    spacing = max(spacing, 1e-9)
+
+    grid_x = np.arange(minx, maxx + spacing, spacing)
+    grid_y = np.arange(miny, maxy + spacing, spacing)
+    gx, gy = np.meshgrid(grid_x, grid_y)
+    grid_points = np.column_stack([gx.ravel(), gy.ravel()])
+
+    coords = np.column_stack([
+        points.geometry.x.values,
+        points.geometry.y.values
+    ])
+
+    tree = cKDTree(coords)
+    _, indices = tree.query(grid_points, k=1)
+    unique_indices = np.unique(indices)
+
+    if len(unique_indices) > target_count:
+        rng = np.random.default_rng(random_state)
+        unique_indices = rng.choice(unique_indices, size=target_count, replace=False)
+
+    sampled = points.iloc[unique_indices].copy()
+    sampled.reset_index(drop=True, inplace=True)
+    if points.crs is not None:
+        sampled.set_crs(points.crs, inplace=True)
+    return sampled
+
+
+def sample_points_density_based(
+    points: gpd.GeoDataFrame,
+    n_samples: int,
+    k_neighbors: int = 8,
+    random_state: Optional[int] = None
+) -> gpd.GeoDataFrame:
+    """Sample points favouring dense areas using k-nearest neighbour density."""
+
+    if n_samples <= 0:
+        raise ValueError("n_samples must be positive")
+
+    if len(points) <= n_samples:
+        return _reset_and_preserve_crs(points)
+
+    if k_neighbors < 1:
+        raise ValueError("k_neighbors must be at least 1")
+
+    coords = np.column_stack([
+        points.geometry.x.values,
+        points.geometry.y.values
+    ])
+
+    tree = cKDTree(coords)
+    k = min(k_neighbors + 1, len(points))
+    distances, _ = tree.query(coords, k=k)
+
+    if distances.ndim == 1:
+        # Only one neighbour available (self)
+        weights = np.ones(len(points), dtype=float)
+    else:
+        kth_distance = distances[:, -1]
+        weights = 1.0 / (kth_distance + 1e-9)
+
+    if np.all(weights == 0):
+        warnings.warn("All density weights are zero; falling back to random sampling")
+        return sample_points_random(points, n_samples, random_state=random_state)
+
+    weights = np.nan_to_num(weights, nan=0.0)
+    if weights.sum() == 0:
+        warnings.warn("Density weights sum to zero; falling back to random sampling")
+        return sample_points_random(points, n_samples, random_state=random_state)
+
+    probabilities = weights / weights.sum()
+    rng = np.random.default_rng(random_state)
+    chosen_indices = rng.choice(
+        np.arange(len(points)), size=n_samples, replace=False, p=probabilities
+    )
+
+    sampled = points.iloc[chosen_indices].copy()
+    sampled.reset_index(drop=True, inplace=True)
+    if points.crs is not None:
+        sampled.set_crs(points.crs, inplace=True)
+    return sampled
+
+
 def prepare_sample_data(
     n_points: int = 500,
     pattern: str = 'random',
@@ -279,6 +474,7 @@ def prepare_sample_data(
         # Multiple clusters (similar to old 'clustered')
         n_clusters = int(np.sqrt(n_points) / 2)
         points_per_cluster = n_points // n_clusters
+        remainder = n_points % n_clusters  # Handle remainder points
         
         # Cluster centers
         cx = np.random.uniform(minx, maxx, n_clusters)
@@ -287,11 +483,13 @@ def prepare_sample_data(
         
         # Points around centers
         coords_list = []
-        for center in centers:
+        for i, center in enumerate(centers):
+            # Distribute remainder points across first few clusters
+            cluster_size = points_per_cluster + (1 if i < remainder else 0)
             cluster_points = np.random.normal(
                 center,
                 scale=(maxx - minx) / 20,
-                size=(points_per_cluster, 2)
+                size=(cluster_size, 2)
             )
             coords_list.append(cluster_points)
         

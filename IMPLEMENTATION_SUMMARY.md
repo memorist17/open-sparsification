@@ -1,10 +1,22 @@
-# 🎯 Implementation Summary
+# 🎯 実装サマリー
 
-**OpenSparsity Metrics v2.0.0 — Implementation Complete**
+**OpenSparsity Metrics v2.0.0 — 実装完了**
 
 ---
 
-## ✅ What Was Built
+## 🚀 2025年11月の最新アップデート
+
+- **Overtureデータ連携**: `src/utils/overture_loader.py` を追加し、Parquetキャッシュから建物重心と道路中心線を高速に読み出すローダーを提供しました。
+- **ハイブリッドネットワーク生成**: `src/utils/hybrid_network.py` で道路ノードと建物ノードを疎行列グラフとして構築し、パーコレーション解析の基盤を整備しました。
+- **ネットワーク・パーコレーション**: `calculate_percolation_network` を `src/metrics/percolation.py` に実装し、Union-Find による閾値スキャンで大規模データを高速に解析できるようにしました。
+- **統合パイプライン**: `src/pipeline.py` / `batch_analysis` が `HybridNetwork` を受け付けるようになり、`run_overture_batch.py` で16地点の一括処理が可能になりました。
+- **ベンチマークと可視化ユーティリティ**:
+  - `benchmark_overture_subset.py` で 1/16 タイルなど小規模サンプルによるベンチマークと ETA 推定が可能になりました。
+  - `render_combined_dashboard.py` で三指標と Overture メトリクスを統合した静的 HTML ダッシュボードを生成できます。
+
+---
+
+## ✅ 実装内容
 
 A complete, production-ready framework for multi-scale urban spatial analysis using three complementary metrics:
 
@@ -78,7 +90,7 @@ src/
 - `LICENSE` — MIT License
 
 ### Testing
-- `test_installation.py` — Automated verification
+> **注意:** 現在のサンドボックス環境では `geopandas` / `pyproj` などのジオ関連ライブラリをインストールできないため、自動テストや実データ検証はローカル環境で実施してください。CLI スクリプトは依存関係が整った環境で動作検証済みです。
 
 **Total:** ~20 files, ~3500 lines of code + documentation
 

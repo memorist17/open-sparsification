@@ -11,12 +11,16 @@ Percolation measures connectivity as a function of distance threshold:
 
 import numpy as np
 import networkx as nx
-from typing import Dict, List, Tuple, Optional
+from typing import Dict, Iterable, List, Tuple, Optional
 import geopandas as gpd
 from shapely.geometry import Point, LineString
 import pandas as pd
 from scipy.spatial import Delaunay
 from tqdm import tqdm
+
+# ---------------------------------------------------------------------------
+# Point-based percolation (existing implementation)
+# ---------------------------------------------------------------------------
 
 
 def build_distance_network(
@@ -166,6 +170,111 @@ def calculate_percolation(
             **metrics
         })
     
+    return pd.DataFrame(results)
+
+
+def calculate_percolation_network(
+    num_nodes: int,
+    weighted_edges: Iterable[Tuple[int, int, float]],
+    thresholds: Optional[List[float]] = None,
+) -> pd.DataFrame:
+    """Calculate percolation transition on a weighted network using union-find.
+
+    Parameters
+    ----------
+    num_nodes : int
+        Number of nodes in the network.
+    weighted_edges : iterable of tuple
+        Iterable of edges as ``(u, v, length)`` with ``length`` in meters.
+    thresholds : list of float, optional
+        Distance thresholds in meters. When omitted, unique edge lengths are used.
+
+    Returns
+    -------
+    pd.DataFrame
+        Per-threshold metrics (S1 ratio, component count, average degree, etc.).
+    """
+
+    if num_nodes <= 0:
+        raise ValueError("num_nodes must be positive for network percolation analysis.")
+
+    edges = [(int(u), int(v), float(w)) for u, v, w in weighted_edges]
+    if not edges:
+        thresholds = sorted(set(thresholds or []))
+        if not thresholds:
+            raise ValueError("At least one threshold or edge is required for analysis.")
+        empty_metrics = {
+            "threshold": thresholds,
+            "S1_ratio": [0.0] * len(thresholds),
+            "n_components": [num_nodes] * len(thresholds),
+            "avg_degree": [0.0] * len(thresholds),
+            "clustering": [np.nan] * len(thresholds),
+            "avg_path_length": [np.nan] * len(thresholds),
+        }
+        return pd.DataFrame(empty_metrics)
+
+    if thresholds is None:
+        thresholds = sorted({edge[2] for edge in edges})
+    else:
+        thresholds = sorted(thresholds)
+
+    edges_sorted = sorted(edges, key=lambda e: e[2])
+
+    parent = list(range(num_nodes))
+    size = [1] * num_nodes
+    components = num_nodes
+    largest_size = 1
+    active_edges = 0
+
+    results = {
+        "threshold": [],
+        "S1_ratio": [],
+        "n_components": [],
+        "avg_degree": [],
+        "clustering": [],
+        "avg_path_length": [],
+    }
+
+    def find(x: int) -> int:
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    def union(x: int, y: int) -> bool:
+        nonlocal largest_size, components
+        root_x = find(x)
+        root_y = find(y)
+        if root_x == root_y:
+            return False
+        if size[root_x] < size[root_y]:
+            root_x, root_y = root_y, root_x
+        parent[root_y] = root_x
+        size[root_x] += size[root_y]
+        largest_size = max(largest_size, size[root_x])
+        components -= 1
+        return True
+
+    edge_index = 0
+    num_edges = len(edges_sorted)
+
+    for threshold in thresholds:
+        while edge_index < num_edges and edges_sorted[edge_index][2] <= threshold:
+            u, v, _ = edges_sorted[edge_index]
+            union(u, v)
+            active_edges += 1
+            edge_index += 1
+
+        s1_ratio = largest_size / num_nodes
+        avg_degree = (2.0 * active_edges) / num_nodes if num_nodes > 0 else 0.0
+
+        results["threshold"].append(float(threshold))
+        results["S1_ratio"].append(s1_ratio)
+        results["n_components"].append(components)
+        results["avg_degree"].append(avg_degree)
+        results["clustering"].append(np.nan)
+        results["avg_path_length"].append(np.nan)
+
     return pd.DataFrame(results)
 
 

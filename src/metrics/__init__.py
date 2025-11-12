@@ -8,7 +8,7 @@ Contains three core metrics:
 """
 
 from .lacunarity import calculate_lacunarity, lacunarity_summary, lacunarity_scale_aggregation
-from .percolation import calculate_percolation, percolation_summary
+from .percolation import calculate_percolation, calculate_percolation_network, percolation_summary
 from .multifractal import calculate_multifractal, multifractal_summary
 
 __all__ = [
@@ -16,6 +16,7 @@ __all__ = [
     'lacunarity_summary',
     'lacunarity_scale_aggregation',
     'calculate_percolation',
+    'calculate_percolation_network',
     'percolation_summary',
     'calculate_multifractal',
     'multifractal_summary',

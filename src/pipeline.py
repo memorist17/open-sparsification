@@ -16,10 +16,11 @@ from .metrics import (
     lacunarity_summary,
     lacunarity_scale_aggregation,
     calculate_percolation,
+    calculate_percolation_network,
     percolation_summary,
     calculate_multifractal
 )
-from .utils import create_output_structure, save_results
+from .utils import create_output_structure, save_results, HybridNetwork
 from .visualization import (
     plot_lacunarity,
     plot_percolation,
@@ -45,7 +46,8 @@ class OpenSparsityAnalyzer:
     def __init__(
         self,
         points: gpd.GeoDataFrame,
-        config: Optional[Dict] = None
+        config: Optional[Dict] = None,
+        network: Optional[HybridNetwork] = None,
     ):
         """
         Initialize analyzer.
@@ -65,6 +67,7 @@ class OpenSparsityAnalyzer:
         self.points = points
         self.config = config or self._default_config()
         self.results = {}
+        self.network = network
     
     @staticmethod
     def _default_config() -> Dict:
@@ -106,10 +109,15 @@ class OpenSparsityAnalyzer:
             pixel_size=self.config['pixel_size'],
             window_sizes=self.config['lacunarity_scales']
         )
-        
-        # Summarize
-        summary = lacunarity_summary(lac, self.config['pixel_size'])
-        aggregation = lacunarity_scale_aggregation(summary)
+
+        if not lac:
+            summary = pd.DataFrame(
+                columns=['scale_pixels', 'scale_meters', 'lacunarity', 'scale_category']
+            )
+            aggregation = {}
+        else:
+            summary = lacunarity_summary(lac, self.config['pixel_size'])
+            aggregation = lacunarity_scale_aggregation(summary)
         
         # Store results
         self.results['lacunarity'] = summary
@@ -139,11 +147,28 @@ class OpenSparsityAnalyzer:
             print("Running Percolation Analysis...")
         
         # Calculate percolation
-        perc = calculate_percolation(
-            self.points,
-            thresholds=self.config['percolation_thresholds'],
-            method=self.config['percolation_method']
-        )
+        method = self.config.get('percolation_method', 'radius')
+
+        if method == 'network':
+            if self.network is None:
+                raise ValueError("Percolation method 'network' requires a HybridNetwork instance.")
+
+            edges_iter = (
+                (int(row.source), int(row.target), float(row.length))
+                for row in self.network.edges.itertuples()
+                if float(row.length) > 0.0
+            )
+            perc = calculate_percolation_network(
+                num_nodes=len(self.network.nodes),
+                weighted_edges=edges_iter,
+                thresholds=self.config.get('percolation_thresholds'),
+            )
+        else:
+            perc = calculate_percolation(
+                self.points,
+                thresholds=self.config['percolation_thresholds'],
+                method=method
+            )
         
         # Summarize
         summary = percolation_summary(perc)
@@ -294,36 +319,43 @@ class OpenSparsityAnalyzer:
         figs = {}
         
         # Individual plots
-        if 'lacunarity' in self.results:
+        lac_df = self.results.get('lacunarity')
+        if isinstance(lac_df, pd.DataFrame) and len(lac_df) >= 3:
             output_file = Path(output_dir) / 'lacunarity.png' if output_dir else None
             figs['lacunarity'] = plot_lacunarity(
-                self.results['lacunarity'],
+                lac_df,
                 output_file=str(output_file) if output_file else None
             )
         
-        if 'percolation' in self.results:
+        perc_df = self.results.get('percolation')
+        if isinstance(perc_df, pd.DataFrame) and len(perc_df) >= 3:
             output_file = Path(output_dir) / 'percolation.png' if output_dir else None
             r_p = self.results.get('percolation_summary', {}).get('r_p')
             figs['percolation'] = plot_percolation(
-                self.results['percolation'],
+                perc_df,
                 r_p=r_p,
                 output_file=str(output_file) if output_file else None
             )
         
-        if 'multifractal' in self.results:
+        mf_df = self.results.get('multifractal')
+        if isinstance(mf_df, pd.DataFrame) and len(mf_df) >= 3:
             output_file = Path(output_dir) / 'multifractal.png' if output_dir else None
             figs['multifractal'] = plot_multifractal(
-                self.results['multifractal'],
+                mf_df,
                 output_file=str(output_file) if output_file else None
             )
         
         # Combined plot
-        if all(k in self.results for k in ['lacunarity', 'percolation', 'multifractal']):
+        if (
+            isinstance(lac_df, pd.DataFrame) and len(lac_df) >= 3 and
+            isinstance(perc_df, pd.DataFrame) and len(perc_df) >= 3 and
+            isinstance(mf_df, pd.DataFrame) and len(mf_df) >= 3
+        ):
             output_file = Path(output_dir) / 'combined.png' if output_dir else None
             figs['combined'] = plot_combined_metrics(
-                self.results['lacunarity'],
-                self.results['percolation'],
-                self.results['multifractal'],
+                lac_df,
+                perc_df,
+                mf_df,
                 output_file=str(output_file) if output_file else None
             )
         
@@ -337,6 +369,7 @@ def batch_analysis(
     points_dict: Dict[str, gpd.GeoDataFrame],
     output_dir: str,
     config: Optional[Dict] = None,
+    networks: Optional[Dict[str, HybridNetwork]] = None,
     verbose: bool = True
 ) -> Dict[str, Dict]:
     """
@@ -362,6 +395,14 @@ def batch_analysis(
     
     # Create output structure
     paths = create_output_structure(output_dir)
+
+    save_figures_flag = True
+    analyzer_config = None
+    if config is not None:
+        save_figures_flag = config.get('save_figures', True)
+        analyzer_config = {k: v for k, v in config.items() if k != 'save_figures'}
+    else:
+        analyzer_config = None
     
     for pattern_name, points in tqdm(points_dict.items(), desc="Batch analysis"):
         if verbose:
@@ -370,7 +411,8 @@ def batch_analysis(
             print(f"{'='*60}")
         
         # Run analysis
-        analyzer = OpenSparsityAnalyzer(points, config)
+        analyzer_network = networks.get(pattern_name) if networks else None
+        analyzer = OpenSparsityAnalyzer(points, analyzer_config, network=analyzer_network)
         results = analyzer.run_all(verbose=verbose)
         
         # Save results
@@ -383,11 +425,23 @@ def batch_analysis(
         points.to_file(str(points_file), driver='GPKG')
         if verbose:
             print(f"Saved point data: {points_file}")
+
+        if analyzer_network is not None:
+            network_dir = pattern_dir / "network"
+            network_dir.mkdir(exist_ok=True)
+            nodes_path = network_dir / f"{pattern_name}_nodes.gpkg"
+            edges_path = network_dir / f"{pattern_name}_edges.parquet"
+            analyzer_network.nodes.to_file(str(nodes_path), driver="GPKG")
+            analyzer_network.edges.to_parquet(edges_path, index=False)
+            if verbose:
+                print(f"Saved network nodes: {nodes_path}")
+                print(f"Saved network edges: {edges_path}")
         
-        # Save visualizations
-        fig_dir = pattern_dir / 'figures'
-        fig_dir.mkdir(exist_ok=True)
-        analyzer.visualize(output_dir=str(fig_dir), show=False)
+        # Save visualizations if requested and data sufficient
+        if save_figures_flag:
+            fig_dir = pattern_dir / 'figures'
+            fig_dir.mkdir(exist_ok=True)
+            analyzer.visualize(output_dir=str(fig_dir), show=False)
         
         all_results[pattern_name] = results
     

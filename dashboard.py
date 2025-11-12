@@ -275,11 +275,31 @@ def create_multifractal_figure(results, selected_patterns):
             row=1, col=1
         )
         
-        # f(α) spectrum
+        # f(α) spectrum with loop removal
+        # Sort by alpha for loop detection
+        df_sorted = df.sort_values('alpha').reset_index(drop=True)
+        
+        # Remove backward loops: if f(alpha) decreases when alpha increases, it's a loop
+        valid_mask = np.ones(len(df_sorted), dtype=bool)
+        alpha_arr = df_sorted['alpha'].values
+        f_alpha_arr = df_sorted['f_alpha'].values
+        
+        for i in range(1, len(df_sorted)):
+            # If alpha increases but f_alpha decreases significantly, check for loop
+            if alpha_arr[i] > alpha_arr[i-1] and f_alpha_arr[i] < f_alpha_arr[i-1] - 0.05:
+                # Check if this creates a backward loop with earlier points
+                for j in range(max(0, i-5), i-1):
+                    if alpha_arr[j] < alpha_arr[i] and f_alpha_arr[j] > f_alpha_arr[i]:
+                        # Loop detected, mark this point for removal
+                        valid_mask[i] = False
+                        break
+        
+        df_filtered = df_sorted[valid_mask].sort_values('alpha')
+        
         fig.add_trace(
             go.Scatter(
-                x=df['alpha'],
-                y=df['f_alpha'],
+                x=df_filtered['alpha'],
+                y=df_filtered['f_alpha'],
                 mode='lines+markers',
                 name=pattern,
                 line=dict(width=3, color=color),
@@ -392,11 +412,14 @@ def create_point_distribution_figure(results, selected_patterns):
             else:  # multiclustered
                 n_clusters = 5
                 points_per_cluster = n_points // n_clusters
+                remainder = n_points % n_clusters  # Handle remainder points
                 x_coords, y_coords = [], []
-                for _ in range(n_clusters):
+                for i in range(n_clusters):
                     cx, cy = np.random.uniform(100, 900, 2)
-                    x = np.random.normal(cx, 80, points_per_cluster)
-                    y = np.random.normal(cy, 80, points_per_cluster)
+                    # Distribute remainder points across first few clusters
+                    cluster_size = points_per_cluster + (1 if i < remainder else 0)
+                    x = np.random.normal(cx, 80, cluster_size)
+                    y = np.random.normal(cy, 80, cluster_size)
                     x_coords.extend(x)
                     y_coords.extend(y)
         
