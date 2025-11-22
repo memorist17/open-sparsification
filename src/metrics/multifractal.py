@@ -103,7 +103,8 @@ def calculate_tau_q(
     points: gpd.GeoDataFrame,
     q_values: List[float],
     box_sizes: Optional[List[float]] = None,
-    bounds: Optional[Tuple[float, float, float, float]] = None
+    bounds: Optional[Tuple[float, float, float, float]] = None,
+    n_jobs: Optional[int] = None
 ) -> Tuple[np.ndarray, np.ndarray]:
     """
     Calculate mass exponent τ(q) from scaling of moment sums.
@@ -132,9 +133,8 @@ def calculate_tau_q(
     if box_sizes is None:
         box_sizes = [10, 25, 50, 100, 200, 400, 800, 1000]
     
-    tau_values = []
-    
-    for q in tqdm(q_values, desc="Multifractal τ(q)"):
+    def compute_tau_for_q(q: float) -> float:
+        """単一q値のτを計算"""
         moment_sums = []
         valid_sizes = []
         
@@ -152,9 +152,31 @@ def calculate_tau_q(
             log_chi = np.log(moment_sums)
             
             slope, intercept, r_value, p_value, std_err = stats.linregress(log_epsilon, log_chi)
-            tau_values.append(slope)
+            return slope
         else:
-            tau_values.append(np.nan)
+            return np.nan
+    
+    # 並列処理（joblib使用）
+    if n_jobs is None or n_jobs > 1:
+        from joblib import Parallel, delayed
+        try:
+            from ..utils.parallel_utils import get_optimal_n_jobs
+        except ImportError:
+            import multiprocessing as mp
+            def get_optimal_n_jobs(n_tasks):
+                return min(n_tasks, mp.cpu_count())
+        
+        if n_jobs is None:
+            n_jobs = get_optimal_n_jobs(len(q_values))
+        
+        if n_jobs > 1 and len(q_values) > 1:
+            tau_values = Parallel(n_jobs=n_jobs, backend='threading', verbose=0)(
+                delayed(compute_tau_for_q)(q) for q in q_values
+            )
+        else:
+            tau_values = [compute_tau_for_q(q) for q in tqdm(q_values, desc="Multifractal τ(q)")]
+    else:
+        tau_values = [compute_tau_for_q(q) for q in tqdm(q_values, desc="Multifractal τ(q)")]
     
     return np.array(tau_values), np.array(q_values)
 
@@ -194,7 +216,8 @@ def calculate_multifractal_spectrum(
     points: gpd.GeoDataFrame,
     q_values: Optional[List[float]] = None,
     box_sizes: Optional[List[float]] = None,
-    bounds: Optional[Tuple[float, float, float, float]] = None
+    bounds: Optional[Tuple[float, float, float, float]] = None,
+    n_jobs: Optional[int] = None
 ) -> pd.DataFrame:
     """
     Complete multifractal analysis: D(q) and f(α) spectrum.
@@ -218,8 +241,8 @@ def calculate_multifractal_spectrum(
     if q_values is None:
         q_values = [-5, -3, -2, -1, -0.5, 0, 0.5, 1, 1.5, 2, 3, 5]
     
-    # Calculate τ(q)
-    tau, q = calculate_tau_q(points, q_values, box_sizes, bounds)
+    # Calculate τ(q) (並列化対応)
+    tau, q = calculate_tau_q(points, q_values, box_sizes, bounds, n_jobs=n_jobs)
     
     # Calculate D(q)
     D_q = calculate_D_q(tau, q)
@@ -334,7 +357,8 @@ def multifractal_summary(results: pd.DataFrame) -> Dict[str, float]:
 def calculate_multifractal(
     points: gpd.GeoDataFrame,
     q_values: Optional[List[float]] = None,
-    box_sizes: Optional[List[float]] = None
+    box_sizes: Optional[List[float]] = None,
+    n_jobs: Optional[int] = None
 ) -> Tuple[pd.DataFrame, Dict[str, float]]:
     """
     Convenience function for complete multifractal analysis.
@@ -355,7 +379,7 @@ def calculate_multifractal(
     summary : dict
         Key summary statistics
     """
-    spectrum = calculate_multifractal_spectrum(points, q_values, box_sizes)
+    spectrum = calculate_multifractal_spectrum(points, q_values, box_sizes, n_jobs=n_jobs)
     summary = multifractal_summary(spectrum)
     
     return spectrum, summary
