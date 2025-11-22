@@ -23,7 +23,7 @@ def points_to_raster(
     pixel_size: float = 5.0
 ) -> np.ndarray:
     """
-    Convert point cloud to binary raster.
+    Convert point cloud to binary raster (高速化版).
     
     Parameters
     ----------
@@ -48,25 +48,34 @@ def points_to_raster(
     # Initialize empty raster
     raster = np.zeros((height, width), dtype=np.uint8)
     
-    # Convert points to pixel coordinates
-    for geom in points.geometry:
-        if geom.geom_type == 'Point':
-            x, y = geom.x, geom.y
-            col = int((x - minx) / pixel_size)
-            row = int((maxy - y) / pixel_size)  # Flip Y axis
-            
-            if 0 <= row < height and 0 <= col < width:
-                raster[row, col] = 1
+    # ベクトル化された座標変換（高速化）
+    coords = np.array([[geom.x, geom.y] for geom in points.geometry if geom.geom_type == 'Point'])
+    
+    if len(coords) == 0:
+        return raster
+    
+    # ピクセル座標に変換
+    cols = ((coords[:, 0] - minx) / pixel_size).astype(int)
+    rows = ((maxy - coords[:, 1]) / pixel_size).astype(int)  # Flip Y axis
+    
+    # 範囲内のポイントのみ処理
+    valid_mask = (0 <= rows) & (rows < height) & (0 <= cols) & (cols < width)
+    valid_rows = rows[valid_mask]
+    valid_cols = cols[valid_mask]
+    
+    # ラスターに設定（ベクトル化）
+    raster[valid_rows, valid_cols] = 1
     
     return raster
 
 
 def sliding_window_lacunarity(
     raster: np.ndarray,
-    window_sizes: List[int]
+    window_sizes: List[int],
+    n_jobs: Optional[int] = None
 ) -> Dict[int, float]:
     """
-    Calculate lacunarity using gliding box method.
+    Calculate lacunarity using gliding box method (並列化対応).
     
     Parameters
     ----------
@@ -74,6 +83,8 @@ def sliding_window_lacunarity(
         Binary raster of point distribution
     window_sizes : list of int
         Box sizes k in pixels (e.g., [3, 5, 7, 11, 15, 21, ...])
+    n_jobs : int, optional
+        並列ワーカー数（Noneの場合は自動決定）
     
     Returns
     -------
@@ -88,11 +99,12 @@ def sliding_window_lacunarity(
        - Calculate mean μ(k) and variance σ²(k)
     2. Lacunarity: Λ(k) = σ²(k) / μ(k)² + 1
     """
-    lacunarity = {}
+    from typing import Optional
     
-    for k in window_sizes:
+    def compute_lacunarity_for_window(k: int) -> Tuple[int, float]:
+        """単一ウィンドウサイズのラクナリティを計算"""
         if k > min(raster.shape):
-            continue
+            return k, np.nan
             
         # Apply sliding window using uniform_filter (mean)
         sums = ndimage.uniform_filter(raster.astype(float), size=k, mode='constant')
@@ -100,10 +112,13 @@ def sliding_window_lacunarity(
         
         # Extract valid window region (avoid edge effects)
         margin = k // 2
+        if margin >= raster.shape[0] or margin >= raster.shape[1]:
+            return k, np.nan
+        
         valid_sums = sums[margin:-margin, margin:-margin]
         
         if valid_sums.size == 0:
-            continue
+            return k, np.nan
         
         # Calculate statistics
         mean_val = np.mean(valid_sums)
@@ -115,7 +130,32 @@ def sliding_window_lacunarity(
         else:
             lac = np.nan
         
-        lacunarity[k] = lac
+        return k, lac
+    
+    # 並列処理（joblib使用）
+    if n_jobs is None or n_jobs > 1:
+        from joblib import Parallel, delayed
+        try:
+            from ..utils.parallel_utils import get_optimal_n_jobs
+        except ImportError:
+            import multiprocessing as mp
+            def get_optimal_n_jobs(n_tasks):
+                return min(n_tasks, mp.cpu_count())
+        
+        if n_jobs is None:
+            n_jobs = get_optimal_n_jobs(len(window_sizes))
+        
+        if n_jobs > 1 and len(window_sizes) > 1:
+            results = Parallel(n_jobs=n_jobs, backend='threading', verbose=0)(
+                delayed(compute_lacunarity_for_window)(k) for k in window_sizes
+            )
+            lacunarity = {k: lac for k, lac in results}
+        else:
+            # 並列化しない
+            lacunarity = {k: lac for k, lac in [compute_lacunarity_for_window(k) for k in window_sizes]}
+    else:
+        # 並列化しない
+        lacunarity = {k: lac for k, lac in [compute_lacunarity_for_window(k) for k in window_sizes]}
     
     return lacunarity
 
@@ -124,7 +164,8 @@ def calculate_lacunarity(
     points: gpd.GeoDataFrame,
     bounds: Optional[Tuple[float, float, float, float]] = None,
     pixel_size: float = 5.0,
-    window_sizes: Optional[List[int]] = None
+    window_sizes: Optional[List[int]] = None,
+    n_jobs: Optional[int] = None
 ) -> Dict[int, float]:
     """
     Calculate lacunarity from point cloud.
@@ -157,8 +198,8 @@ def calculate_lacunarity(
     # Convert to raster
     raster = points_to_raster(points, bounds, pixel_size)
     
-    # Calculate lacunarity
-    lacunarity = sliding_window_lacunarity(raster, window_sizes)
+    # Calculate lacunarity (並列化対応)
+    lacunarity = sliding_window_lacunarity(raster, window_sizes, n_jobs=n_jobs)
     
     return lacunarity
 

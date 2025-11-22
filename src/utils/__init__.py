@@ -12,6 +12,13 @@ from .overture_loader import (
     load_road_segments,
 )
 from .hybrid_network import HybridNetwork, build_hybrid_network
+from .parallel_utils import (
+    get_optimal_n_jobs,
+    parallel_map,
+    parallel_batch_analysis,
+    vectorized_distance_matrix,
+    cached_computation,
+)
 
 __all__ = [
     'load_points',
@@ -28,5 +35,10 @@ __all__ = [
     'ensure_columns',
     'HybridNetwork',
     'build_hybrid_network',
+    'get_optimal_n_jobs',
+    'parallel_map',
+    'parallel_batch_analysis',
+    'vectorized_distance_matrix',
+    'cached_computation',
 ]
 

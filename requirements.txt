@@ -24,6 +24,12 @@ plotly>=5.14.0
 # Progress bars
 tqdm>=4.65.0
 
+# Parallel processing
+joblib>=1.3.0
+
+# Parquet file support (for Overture Maps)
+pyarrow>=12.0.0
+
 # Dashboard (optional but recommended)
 dash>=2.10.0
 kaleido>=0.2.1

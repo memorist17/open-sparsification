@@ -86,7 +86,7 @@ class OpenSparsityAnalyzer:
             'box_sizes': [10, 25, 50, 100, 200, 400, 800, 1000],
         }
     
-    def run_lacunarity(self, verbose: bool = True) -> pd.DataFrame:
+    def run_lacunarity(self, verbose: bool = True, n_jobs: Optional[int] = None) -> pd.DataFrame:
         """
         Run lacunarity analysis.
         
@@ -103,11 +103,12 @@ class OpenSparsityAnalyzer:
         if verbose:
             print("Running Lacunarity Analysis...")
         
-        # Calculate lacunarity
+        # Calculate lacunarity (並列化対応)
         lac = calculate_lacunarity(
             self.points,
             pixel_size=self.config['pixel_size'],
-            window_sizes=self.config['lacunarity_scales']
+            window_sizes=self.config['lacunarity_scales'],
+            n_jobs=n_jobs
         )
 
         if not lac:
@@ -183,7 +184,7 @@ class OpenSparsityAnalyzer:
         
         return perc
     
-    def run_multifractal(self, verbose: bool = True) -> Tuple[pd.DataFrame, Dict]:
+    def run_multifractal(self, verbose: bool = True, n_jobs: Optional[int] = None) -> Tuple[pd.DataFrame, Dict]:
         """
         Run multifractal analysis.
         
@@ -202,11 +203,12 @@ class OpenSparsityAnalyzer:
         if verbose:
             print("Running Multifractal Analysis...")
         
-        # Calculate multifractal
+        # Calculate multifractal (並列化対応)
         spectrum, summary = calculate_multifractal(
             self.points,
             q_values=self.config['multifractal_q'],
-            box_sizes=self.config['box_sizes']
+            box_sizes=self.config['box_sizes'],
+            n_jobs=n_jobs
         )
         
         # Store results
@@ -219,7 +221,7 @@ class OpenSparsityAnalyzer:
         
         return spectrum, summary
     
-    def run_all(self, verbose: bool = True) -> Dict:
+    def run_all(self, verbose: bool = True, n_jobs: Optional[int] = None) -> Dict:
         """
         Run complete three-indicator analysis.
         
@@ -241,10 +243,10 @@ class OpenSparsityAnalyzer:
             print(f"Bounds: {self.points.total_bounds}")
             print()
         
-        # Run analyses
-        self.run_lacunarity(verbose=verbose)
+        # Run analyses (並列化対応)
+        self.run_lacunarity(verbose=verbose, n_jobs=n_jobs)
         self.run_percolation(verbose=verbose)
-        self.run_multifractal(verbose=verbose)
+        self.run_multifractal(verbose=verbose, n_jobs=n_jobs)
         
         # Compile summary
         self.results['summary'] = self._compile_summary()
@@ -370,7 +372,8 @@ def batch_analysis(
     output_dir: str,
     config: Optional[Dict] = None,
     networks: Optional[Dict[str, HybridNetwork]] = None,
-    verbose: bool = True
+    verbose: bool = True,
+    n_jobs: Optional[int] = None
 ) -> Dict[str, Dict]:
     """
     Run batch analysis on multiple point datasets.
@@ -410,10 +413,10 @@ def batch_analysis(
             print(f"Processing: {pattern_name}")
             print(f"{'='*60}")
         
-        # Run analysis
+        # Run analysis (並列化対応)
         analyzer_network = networks.get(pattern_name) if networks else None
         analyzer = OpenSparsityAnalyzer(points, analyzer_config, network=analyzer_network)
-        results = analyzer.run_all(verbose=verbose)
+        results = analyzer.run_all(verbose=verbose, n_jobs=n_jobs)
         
         # Save results
         pattern_dir = paths['base'] / pattern_name
